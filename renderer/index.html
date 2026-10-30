@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self' file: media:; script-src 'self' file:; style-src 'self' 'unsafe-inline' file:; img-src 'self' file: media: data: blob:; media-src 'self' file: media: blob:; connect-src 'self' file: media:; font-src 'self' file: data:">
+  <title>Fotograma Studio</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <svg width="0" height="0" style="position:absolute" aria-hidden="true">
+    <defs id="fx-defs-0"></defs>
+    <defs id="fx-defs-1"></defs>
+    <defs id="swatch-defs"></defs>
+  </svg>
+
+  <header class="topbar glass">
+    <div class="brand">
+      <span class="logo"></span>
+      <span class="brand-name">Fotograma <b>Studio</b></span>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-view="editor"><span data-icon="film"></span>Editor</button>
+      <button class="tab" data-view="studio"><span data-icon="wave"></span>Audio Studio</button>
+      <button class="tab" data-view="cutter"><span data-icon="scissors"></span>Cortador</button>
+      <button class="tab" data-view="compressor"><span data-icon="compress"></span>Compresor</button>
+      <button class="tab" data-view="capture"><span data-icon="rec"></span>Captura<span class="tab-live" id="tab-live" hidden></span></button>
+    </nav>
+    <div class="topbar-actions editor-only">
+      <span class="project-name" id="project-name">Proyecto sin título</span>
+      <button class="btn ghost icon-only" id="btn-new" title="Nuevo proyecto"><span data-icon="file"></span></button>
+      <button class="btn ghost" id="btn-open" title="Abrir proyecto (Ctrl+O)"><span data-icon="folder"></span>Abrir</button>
+      <button class="btn ghost" id="btn-save" title="Guardar proyecto (Ctrl+S)"><span data-icon="save"></span>Guardar</button>
+      <span class="sep"></span>
+      <button class="btn ghost icon-only" id="btn-undo" title="Deshacer (Ctrl+Z)"><span data-icon="undo"></span></button>
+      <button class="btn ghost icon-only" id="btn-redo" title="Rehacer (Ctrl+Y)"><span data-icon="redo"></span></button>
+      <span class="sep"></span>
+      <button class="btn primary" id="btn-export" title="Exportar (Ctrl+E)"><span data-icon="export"></span>Exportar</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- ======================= EDITOR ======================= -->
+    <section class="view active" id="view-editor">
+      <aside class="panel glass" id="library">
+        <div class="panel-head">
+          <h2>Medios</h2>
+          <button class="btn small" id="btn-import" title="Importar vídeo o audio (Ctrl+I)"><span data-icon="plus"></span>Importar</button>
+        </div>
+        <div class="seg block lib-filter" id="lib-filter">
+          <button data-f="all" class="on">Todo</button>
+          <button data-f="video">Vídeo</button>
+          <button data-f="audio">Audio</button>
+          <button data-f="capture">Capturas</button>
+        </div>
+        <div class="panel-body" id="media-list"></div>
+        <div class="panel-foot">
+          <button class="btn small block" id="btn-add-all"><span data-icon="layers"></span>Añadir todo a la línea de tiempo</button>
+        </div>
+      </aside>
+
+      <section class="panel glass" id="viewer">
+        <div class="viewer-bar">
+          <span class="mode-badge" id="mode-badge">Secuencia</span>
+          <label class="inline-field">Lienzo <select id="sel-aspect"></select></label>
+          <div class="seg" id="fit-toggle">
+            <button data-fit="contain" title="Encajar con bandas negras">Ajustar</button>
+            <button data-fit="cover" title="Rellenar el lienzo recortando bordes">Rellenar</button>
+          </div>
+          <span class="spacer"></span>
+          <span class="out-info" id="out-info"></span>
+          <button class="btn small ghost icon-only" id="btn-fullscreen" title="Pantalla completa (F)"><span data-icon="maximize"></span></button>
+        </div>
+        <div id="stage-wrap">
+          <div id="stage">
+            <div class="layer" id="layer-0"><div class="content"><video preload="auto" playsinline></video><div class="vignette"></div></div></div>
+            <div class="layer" id="layer-1"><div class="content"><video preload="auto" playsinline></video><div class="vignette"></div></div></div>
+            <div id="flash"></div>
+            <div id="audio-poster" hidden><div class="ap-icon" data-icon="music"></div><div class="ap-wave" id="ap-wave"></div><div class="ap-name" id="ap-name"></div></div>
+            <canvas id="text-layer"></canvas>
+            <div id="crop-layer" hidden>
+              <div id="crop-box">
+                <div class="crop-grid"></div>
+                <span class="ch nw" data-h="nw"></span><span class="ch ne" data-h="ne"></span>
+                <span class="ch sw" data-h="sw"></span><span class="ch se" data-h="se"></span>
+                <span class="ch n" data-h="n"></span><span class="ch s" data-h="s"></span>
+                <span class="ch e" data-h="e"></span><span class="ch w" data-h="w"></span>
+                <span class="crop-size" id="crop-size"></span>
+              </div>
+            </div>
+            <div id="stage-empty">
+              <div class="empty-icon" data-icon="film"></div>
+              <h3>Empieza tu proyecto</h3>
+              <p>Arrastra vídeos o música aquí o a la biblioteca, o pulsa <b>Importar</b>.</p>
+            </div>
+            <div id="stage-status" hidden></div>
+          </div>
+        </div>
+        <div class="scrubber" id="scrubber">
+          <div class="scrub-range" id="scrub-range" hidden></div>
+          <div class="scrub-fill" id="scrub-fill"></div>
+          <div class="scrub-knob" id="scrub-knob"></div>
+        </div>
+        <div class="transport">
+          <div class="tc-group">
+            <span class="tc" id="tc-current">00:00:00:00</span>
+            <span class="tc-sep">/</span>
+            <span class="tc muted" id="tc-total">00:00:00:00</span>
+          </div>
+          <div class="transport-buttons">
+            <button class="tbtn" id="btn-start" title="Ir al inicio (Inicio)"><span data-icon="skipStart"></span></button>
+            <button class="tbtn" id="btn-prev" title="Fotograma anterior (←)"><span data-icon="frameBack"></span></button>
+            <button class="tbtn play" id="btn-play" title="Reproducir / pausa (Espacio)"><span data-icon="play"></span></button>
+            <button class="tbtn" id="btn-next" title="Fotograma siguiente (→)"><span data-icon="frameFwd"></span></button>
+            <button class="tbtn" id="btn-end" title="Ir al final (Fin)"><span data-icon="skipEnd"></span></button>
+          </div>
+          <div class="transport-right">
+            <button class="btn small ghost" id="btn-mark-in" title="Marcar entrada en el cabezal (I)">[ Entrada</button>
+            <button class="btn small ghost" id="btn-mark-out" title="Marcar salida en el cabezal (O)">Salida ]</button>
+            <button class="btn small accent" id="btn-src-add" hidden><span data-icon="plus"></span>Añadir a la línea</button>
+            <div class="vol">
+              <button class="tbtn small" id="btn-vol" title="Silenciar vista previa"><span data-icon="volume"></span></button>
+              <input type="range" id="vol-slider" min="0" max="1.5" step="0.01" value="1" title="Volumen de la vista previa">
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel glass" id="inspector">
+        <div class="panel-head"><h2>Inspector</h2><span class="muted small" id="inspector-sub"></span></div>
+        <div class="panel-body" id="inspector-body"></div>
+      </aside>
+
+      <div id="splitter" title="Arrastra para cambiar el tamaño"></div>
+
+      <section class="panel glass" id="timeline">
+        <div class="tl-toolbar">
+          <button class="btn small ghost" id="tl-split" title="Dividir en el cabezal (S)"><span data-icon="scissors"></span>Dividir</button>
+          <button class="btn small ghost" id="tl-dup" title="Duplicar (Ctrl+D)"><span data-icon="copy"></span>Duplicar</button>
+          <button class="btn small ghost" id="tl-del" title="Eliminar (Supr)"><span data-icon="trash"></span>Eliminar</button>
+          <span class="sep"></span>
+          <button class="btn small ghost" id="tl-add-text" title="Añadir texto en el cabezal (T)"><span data-icon="type"></span>Texto</button>
+          <button class="btn small ghost" id="tl-add-audio" title="Importar música o efectos de sonido"><span data-icon="music"></span>Música</button>
+          <button class="btn small ghost" id="tl-add-track" title="Nueva pista de audio"><span data-icon="plus"></span>Pista</button>
+          <span class="sep"></span>
+          <button class="btn small ghost icon-only" id="tl-snap" title="Imán: ajustar a bordes y cabezal (N)"><span data-icon="magnet"></span></button>
+          <span class="tl-info" id="tl-info"></span>
+          <span class="spacer"></span>
+          <button class="btn small ghost icon-only" id="tl-zoom-out" title="Alejar (-)"><span data-icon="zoomOut"></span></button>
+          <input type="range" id="tl-zoom" min="0" max="1000" value="500">
+          <button class="btn small ghost icon-only" id="tl-zoom-in" title="Acercar (+)"><span data-icon="zoomIn"></span></button>
+          <button class="btn small ghost" id="tl-fit" title="Ajustar a la ventana"><span data-icon="fit"></span>Ajustar</button>
+        </div>
+        <div class="tl-top">
+          <div class="tl-corner"></div>
+          <canvas id="tl-ruler"></canvas>
+        </div>
+        <div class="tl-body" id="tl-body">
+          <div class="tl-heads" id="tl-heads"></div>
+          <div class="tl-scroll" id="tl-scroll">
+            <div class="tl-content" id="tl-content">
+              <div id="tl-rows"></div>
+              <div class="tl-insert" id="tl-insert" hidden></div>
+              <div class="tl-playhead" id="tl-playhead"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </section>
+
+    <!-- ======================= AUDIO STUDIO ======================= -->
+    <section class="view" id="view-studio">
+      <div class="studio" id="studio"></div>
+    </section>
+
+    <!-- ======================= CORTADOR ======================= -->
+    <section class="view" id="view-cutter">
+      <div class="studio" id="cutter"></div>
+    </section>
+
+    <!-- ======================= COMPRESOR ======================= -->
+    <section class="view" id="view-compressor">
+      <div class="comp-wrap">
+        <div class="comp-hero">
+          <h1>Compresor de vídeo</h1>
+          <p>Reduce el tamaño de un vídeo por porcentaje o fijando exactamente los MB del archivo final.</p>
+        </div>
+        <div class="comp-card glass" id="comp-card"></div>
+      </div>
+    </section>
+    <!-- ======================= CAPTURA ======================= -->
+    <section class="view" id="view-capture">
+      <div class="cap" id="capture"></div>
+    </section>
+  </main>
+
+  <div id="modal-root"></div>
+  <div id="toasts"></div>
+
+  <script src="../src/shared/core.js"></script>
+  <script src="js/icons.js"></script>
+  <script src="js/util.js"></script>
+  <script src="js/state.js"></script>
+  <script src="js/text.js"></script>
+  <script src="js/library.js"></script>
+  <script src="js/player.js"></script>
+  <script src="js/timeline.js"></script>
+  <script src="js/inspector.js"></script>
+  <script src="js/contextmenu.js"></script>
+  <script src="js/export.js"></script>
+  <script src="js/studio.js"></script>
+  <script src="js/cutter.js"></script>
+  <script src="js/compressor.js"></script>
+  <script src="js/capture.js"></script>
+  <script src="js/project.js"></script>
+  <script src="js/main.js"></script>
+</body>
+</html>

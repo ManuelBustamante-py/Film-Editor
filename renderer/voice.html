@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <!-- Ventana oculta: el reconocedor (WebAssembly en un worker) necesita eval y blob:. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self' 'unsafe-eval' 'wasm-unsafe-eval'; worker-src blob:; connect-src media: data: blob:">
+  <title>Fotograma Studio · Voz</title>
+</head>
+<body>
+  <script src="../node_modules/vosk-browser/dist/vosk.js"></script>
+  <script src="js/voice.js"></script>
+</body>
+</html>
