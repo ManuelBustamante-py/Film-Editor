@@ -1,7 +1,7 @@
 {
   "name": "fotograma-studio",
   "productName": "Fotograma Studio",
-  "version": "3.1.0",
+  "version": "3.1.1",
   "description": "Editor de vídeo de escritorio con captura de pantalla y clips instantáneos: unir, recortar, comprimir, velocidad, fotogramas y filtros de color.",
   "main": "main.js",
   "author": "Manuel Bustamante",

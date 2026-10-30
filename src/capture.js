@@ -652,6 +652,7 @@ class Capture extends EventEmitter {
     this.session = null;
     this.old = [];            // sesiones anteriores (tras reconectar) cuyos segmentos se conservan
     this.lock = null;         // { key, size, base, nowUs }: fijo mientras la captura sigue viva
+    this.parked = [];         // [{ lock, old }]: lo grabado a otro tamaño de pantalla (Alt+Tab fuera del juego)
     this.bufferOn = false;
     this.rec = null;          // { startWall }
     this.holds = [];          // instantes (reloj real) que no se pueden borrar todavía
@@ -822,8 +823,25 @@ class Capture extends EventEmitter {
     // compatibles entre sí (se pueden unir en un mismo clip).
     const key = JSON.stringify([s.video.source, s.video.method, s.video.conv, s.video.monitor, s.video.window && s.video.window.exe, s.video.resolution, s.video.fps,
       s.encoder, s.codec, s.quality, s.audioCodec, s.rate, s.bitrate, s.preset, s.mixLimiter, s.audioKbps, s.separateTracks, s.audio.map((a) => [a.id, a.device, a.enabled, a.offsetMs, a.fx || null])]);
-    if (!this.lock || this.lock.key !== key) {
-      this.dropOld();
+    if (this.lock && this.lock.key !== key) { this.dropOld(); this.lock = null; }
+    // Los juegos en pantalla completa exclusiva (p. ej. VALORANT a 1440×1044) cambian el modo de
+    // la pantalla al entrar y al salir, y la captura se reconecta. Se adopta siempre el tamaño
+    // real: estirar cada imagen en la GPU mientras se juega le quitaba fotogramas a la captura.
+    // Lo grabado al tamaño anterior se aparta y se recupera al volver a él (Alt+Tab y vuelta).
+    if (this.lock && s.video.source === 'monitor' && (srcSize.w !== this.lock.size.w || srcSize.h !== this.lock.size.h)) {
+      const rec = this.rec;
+      if (rec) {
+        // La grabación no puede mezclar tamaños: se guarda lo que lleva y sigue en otro archivo.
+        const now = Date.now() / 1000, hold = rec.startWall - 2 * SEG;
+        this.holds.push(hold);
+        this.saveRec(rec, now).catch((e) => this.emit('event', { type: 'error', message: e.message }))
+          .finally(() => { this.holds = this.holds.filter((x) => x !== hold); });
+        this.rec = newRec(now);
+      }
+      this.park(srcSize);
+    }
+    if (!this.lock) {
+      if (!this.parked.length) this.dropOld();
       // Se graba siempre a la resolución nativa (lo más fluido: estirar en la GPU mientras se
       // juega costaba fotogramas) y, si se pidió otra, se estira al guardar el clip.
       const post = targetSize(s);
@@ -897,6 +915,7 @@ class Capture extends EventEmitter {
     setGpuPriority(child.pid, this.settings.gpuPriority).then((ok) => { ss.gpuPriority = ok; });
     throttle.then((ok) => { ss.fullSpeed = ok; });
     this.reconnecting = false;
+    if (this.rec) this.writeRecFile();
     // Por si los ajustes cambiaron mientras arrancaba.
     this.applyLive();
     this.writeRecFile();
@@ -941,7 +960,7 @@ class Capture extends EventEmitter {
     for (const h of this.holds) keepFrom = Math.min(keepFrom, h);
     if (keepFrom === Infinity) return;
     this.marks = this.marks.filter((t) => t >= keepFrom);
-    for (const ss of this.sessions()) {
+    for (const ss of [...this.sessions(), ...this.parkedSessions()]) {
       if (ss.minOffset == null) continue;
       const min = ss === this.session ? 1 : 0;
       while (ss.segs.length > min && ss.segs[0].end + ss.minOffset < keepFrom) {
@@ -950,17 +969,34 @@ class Capture extends EventEmitter {
         fs.unlink(path.join(ss.dir, g.name), () => {});
       }
     }
-    this.old = this.old.filter((o) => {
+    const keep = (o) => {
       if (o.segs.length) return true;
       fsp.rm(o.dir, { recursive: true, force: true }).catch(() => {});
       return false;
-    });
+    };
+    this.old = this.old.filter(keep);
+    for (const p of this.parked) p.old = p.old.filter(keep);
+    this.parked = this.parked.filter((p) => p.old.length);
   }
 
   // Descarta las sesiones anteriores (al detener o al cambiar los ajustes).
   dropOld() {
-    for (const o of this.old) fsp.rm(o.dir, { recursive: true, force: true }).catch(() => {});
+    for (const o of [...this.old, ...this.parkedSessions()]) fsp.rm(o.dir, { recursive: true, force: true }).catch(() => {});
     this.old = [];
+    this.parked = [];
+  }
+
+  parkedSessions() { return this.parked.flatMap((p) => p.old); }
+
+  // Cambia al tamaño de pantalla nuevo: aparta las sesiones del tamaño actual y recupera las
+  // que se grabaron antes a ese tamaño, si las hay (mismo reloj: los clips las unen sin saltos).
+  park(size) {
+    const back = this.parked.find((p) => p.lock.size.w === size.w && p.lock.size.h === size.h);
+    this.parked = this.parked.filter((p) => p !== back);
+    if (this.old.length) this.parked.push({ lock: this.lock, old: this.old });
+    while (this.parked.length > 2) for (const o of this.parked.shift().old) fsp.rm(o.dir, { recursive: true, force: true }).catch(() => {});
+    this.lock = back ? back.lock : null;
+    this.old = back ? back.old : [];
   }
 
   onExit(ss, code) {
@@ -1015,17 +1051,16 @@ class Capture extends EventEmitter {
 
   relock() {
     return this.queue(async () => {
-      if (!this.session || (!this.bufferOn && !this.rec)) return;
-      const rec = this.rec;
-      if (rec) await this.saveRec(rec, Date.now() / 1000).catch(() => {});
-      this.rec = null;
+      const ss = this.session;
+      if (!ss || (!this.bufferOn && !this.rec)) return;
       this.restartToken++;
+      // Se conservan sus segmentos: start() los aparta con el tamaño anterior.
+      ss.keepDir = true;
       await this.stop();
-      this.dropOld();
-      this.lock = null;
+      if (ss.segs.length) this.old.push(ss);
+      else fsp.rm(ss.dir, { recursive: true, force: true }).catch(() => {});
       this.emit('event', { type: 'info', message: 'La resolución de la pantalla cambió: la captura se ajustó al tamaño nuevo.' });
       await this.start();
-      if (rec) this.rec = newRec(Date.now() / 1000);
       this.writeRecFile();
       this.emit('status');
     });
@@ -1096,7 +1131,7 @@ class Capture extends EventEmitter {
   // Borra las carpetas temporales abandonadas. Nunca las de otro proceso que siga vivo (cada
   // carpeta guarda el proceso dueño en "owner"): podría estar capturando en ellas.
   async cleanupStale() {
-    const keep = new Set(this.sessions().map((x) => x.dir));
+    const keep = new Set([...this.sessions(), ...this.parkedSessions()].map((x) => x.dir));
     try {
       for (const d of await fsp.readdir(this.tmpRoot)) {
         if (keep.has(path.join(this.tmpRoot, d))) continue;
