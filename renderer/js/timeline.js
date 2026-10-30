@@ -6,7 +6,7 @@
   const T = (App.timeline = {});
   const MIN_ZOOM = 2, MAX_ZOOM = 600;
   const MIN_LEN = 0.05;
-  let scrollEl, bodyEl, contentEl, rowsEl, headsEl, ruler, playheadEl, insertEl;
+  let scrollEl, bodyEl, contentEl, rowsEl, headsEl, ruler, rulerHeadEl, playheadEl, insertEl;
   let rafPending = false;
   let popover = null;
 
@@ -233,24 +233,31 @@
         ctx.fillText(Core.formatTime(t, major < 1 ? 1 : 0), x + 4, 3);
       }
     }
-    const px = state.playhead * zoom - left;
-    if (px >= -8 && px <= w + 8) {
-      ctx.fillStyle = '#ff5d73';
-      ctx.beginPath();
-      ctx.moveTo(px - 7, 0); ctx.lineTo(px + 7, 0); ctx.lineTo(px + 7, 10); ctx.lineTo(px, 17); ctx.lineTo(px - 7, 10);
-      ctx.closePath();
-      ctx.fill();
-    }
+    placeRulerHead();
   }
 
+  // La marca del cabezal en la regla es un elemento aparte: sigue al cabezal sin redibujar la regla.
+  let rulerHeadX = null;
+  function placeRulerHead() {
+    const x = Math.round((state.playhead * state.zoom - scrollEl.scrollLeft) * 2) / 2;
+    if (x !== rulerHeadX) { rulerHeadX = x; rulerHeadEl.style.transform = `translateX(${x}px)`; }
+  }
+
+  // Durante la reproducción (follow) solo se mueve el cabezal, con transform (lo hace el
+  // compositor, sin recalcular el diseño): leer la altura de las pistas y redibujar la regla en
+  // cada fotograma le quitaba al vídeo el tiempo que necesitaba con el equipo cargado.
+  let playheadX = null;
   T.updatePlayhead = function (follow) {
-    const x = state.playhead * state.zoom;
-    playheadEl.style.left = `${x}px`;
-    playheadEl.style.height = `${rowsEl.offsetHeight}px`;
+    const x = Math.round(state.playhead * state.zoom * 2) / 2;
+    if (x !== playheadX) { playheadX = x; playheadEl.style.transform = `translateX(${x}px)`; }
     if (follow) {
       const l = scrollEl.scrollLeft, w = scrollEl.clientWidth;
+      // Al desplazarse, el evento scroll redibuja la regla.
       if (x > l + w - 40 || x < l) scrollEl.scrollLeft = Math.max(0, x - 60);
+      placeRulerHead();
+      return;
     }
+    playheadEl.style.height = `${rowsEl.offsetHeight}px`;
     drawRuler();
   };
 
@@ -528,6 +535,7 @@
     rowsEl = $('#tl-rows');
     headsEl = $('#tl-heads');
     ruler = $('#tl-ruler');
+    rulerHeadEl = $('#tl-ruler-head');
     playheadEl = $('#tl-playhead');
     insertEl = $('#tl-insert');
 

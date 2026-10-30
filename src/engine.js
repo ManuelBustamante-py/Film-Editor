@@ -89,12 +89,13 @@ function run(cmd, args, { cwd } = {}) {
 }
 
 // Ejecuta FFmpeg informando del progreso. Devuelve { promise, cancel }.
-function runFfmpeg(args, { cwd, duration, onProgress } = {}) {
+function runFfmpeg(args, { cwd, duration, onProgress, priority } = {}) {
   let child, cancelled = false;
   const promise = new Promise((resolve, reject) => {
     child = spawn(bin.ffmpeg, ['-hide_banner', '-nostdin', '-loglevel', 'error', '-progress', 'pipe:1', '-nostats', ...args], {
       cwd, windowsHide: true,
     });
+    if (priority != null) { try { os.setPriority(child.pid, priority); } catch { /* ignorar */ } }
     let buf = '', err = '';
     const st = {};
     child.stdout.on('data', (d) => {
@@ -296,6 +297,49 @@ function proxy(file, info, onProgress) {
     return mediaUrl(out);
   }).finally(() => proxyJobs.delete(key));
   proxyJobs.set(key, job);
+  return job;
+}
+
+// Copia ligera para que la vista previa del editor vaya fluida: 720p, una imagen clave cada 15
+// y decodificación rápida. Los clips de juego traen una clave cada 4 s y a 1080p60: cada salto
+// del visor obligaba a decodificar hasta 250 imágenes. La exportación usa siempre el original.
+// Se genera en segundo plano con prioridad baja (unas 6 veces más rápido que la duración).
+const editJobs = new Map();
+function editProxy(file, info, onProgress) {
+  const key = cacheKey(file);
+  if (editJobs.has(key)) return editJobs.get(key);
+  const out = path.join(cacheDir, `${key}_edit.mp4`);
+  const job = heavy(async () => {
+    if (exists(out)) return mediaUrl(out);
+    const part = out.replace(/\.mp4$/, '.part.mp4');
+    const args = ['-y', '-i', file, '-map', '0:v:0', '-map', '0:a:0?', '-vf', 'scale=-2:min(720\\,ih)',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'fastdecode', '-crf', '25', '-g', '15', '-bf', '0', '-threads', '4',
+      '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-ac', '2', '-movflags', '+faststart', part];
+    await runFfmpeg(args, { duration: info.duration, onProgress, priority: os.constants.priority.PRIORITY_BELOW_NORMAL }).promise;
+    await fsp.rename(part, out);
+    return mediaUrl(out);
+  }).finally(() => editJobs.delete(key));
+  editJobs.set(key, job);
+  return job;
+}
+
+// Solo el audio de un vídeo (sin recodificar si se puede): las pistas de audio que vienen de un
+// vídeo se reproducían abriendo otra vez el MP4 entero de 1080p.
+const audioJobs = new Map();
+function audioProxy(file, info) {
+  const key = cacheKey(file);
+  if (audioJobs.has(key)) return audioJobs.get(key);
+  const copy = ['aac', 'mp3'].includes(info.acodec);
+  const out = path.join(cacheDir, `${key}_audio.${copy && info.acodec === 'mp3' ? 'mp3' : 'm4a'}`);
+  const job = (async () => {
+    if (exists(out)) return mediaUrl(out);
+    const part = out.replace(/(\.\w+)$/, '.part$1');
+    await runFfmpeg(['-y', '-i', file, '-map', '0:a:0', '-vn', ...(copy ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '192k']), part],
+      { duration: info.duration, priority: os.constants.priority.PRIORITY_BELOW_NORMAL }).promise;
+    await fsp.rename(part, out);
+    return mediaUrl(out);
+  })().finally(() => audioJobs.delete(key));
+  audioJobs.set(key, job);
   return job;
 }
 
@@ -938,6 +982,6 @@ function stretchVideo(opts, onProgress) {
 module.exports = {
   exportTracks, stretchVideo, setHwPreference,
   cutAudio, extractAudio, encodeAudio, mediaUrl,
-  init, probe, thumbnails, waveform, proxy, capabilities, exportVideo, buildExport, buildGraph,
+  init, probe, thumbnails, waveform, proxy, editProxy, audioProxy, capabilities, exportVideo, buildExport, buildGraph,
   get bin() { return { ...bin }; },
 };

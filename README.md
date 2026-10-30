@@ -50,6 +50,7 @@ npm run icon                # regenera build/icon.png
 
 **Vista previa**
 - Doble capa de vídeo para cambiar de clip sin cortes y ver las transiciones en vivo.
+- **Vista previa fluida** (por defecto): los clips de 1080p o 60 fps se reproducen desde copias ligeras de 720p con una imagen clave cada 15, preparadas en segundo plano, y el audio de los vídeos desde una copia solo de audio. El reloj manda y el vídeo se pone al día sin saltos, así que la reproducción va a tiempo aunque el equipo esté cargado (captura, juego…). «Original» reproduce los archivos tal cual; la exportación usa siempre los originales.
 - Mezcla de audio en tiempo real (vídeo y música sincronizados, volumen por encima del 100 %).
 - Textos, color, rotación y encuadre tal y como se exportan. Pantalla completa (F).
 

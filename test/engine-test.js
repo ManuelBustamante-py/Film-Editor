@@ -247,6 +247,20 @@ async function job(name, clips, settings, expect) {
   check(!!(await engine.waveform(samples.d)), 'forma de onda');
   check(!!(await engine.proxy(samples.d, info)), 'proxy de previsualización');
 
+  // Vista previa fluida: copia de 720p con una imagen clave cada 15 y audio aparte.
+  const infoB = await engine.probe(samples.b);
+  const fileOf = (url) => decodeURIComponent(new URL(url).pathname.slice(1));
+  const edit = fileOf(await engine.editProxy(samples.b, infoB));
+  const pe = ffprobe(edit);
+  const keys = execFileSync(engine.bin.ffprobe, ['-v', 'error', '-select_streams', 'v:0', '-skip_frame', 'nokey', '-show_entries', 'frame=pts_time', '-of', 'csv=p=0', edit])
+    .toString().trim().split(/\r?\n/).map(parseFloat);
+  check(pe.height === 720 && pe.width === 1280 && Math.abs(pe.fps - 60) < 0.5 && Math.abs(pe.duration - infoB.duration) < 0.1,
+    `copia de vista previa 720p60 (${pe.width}×${pe.height}, ${pe.fps} fps)`);
+  check(keys.length >= 10 && Math.max(...keys.slice(1).map((k, i) => k - keys[i])) <= 0.26, `copia de vista previa con imagen clave cada 0,25 s (${keys.length} claves)`);
+  const aud = fileOf(await engine.audioProxy(samples.b, infoB));
+  const pa = ffprobe(aud);
+  check(pa.acodec === 'aac' && pa.width === undefined && Math.abs(pa.duration - infoB.duration) < 0.1, 'audio aparte de un vídeo (sin imagen)');
+
   console.log(failures ? `\n${failures} comprobación(es) fallida(s)` : '\nTodo correcto ✔');
   process.exit(failures ? 1 : 0);
 })();

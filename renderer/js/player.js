@@ -18,6 +18,7 @@
   let actx = null, master = null;
   const audioEls = new Map();        // id de clip de audio → { el, gain, src }
   let clock = { wall: 0, head: 0 };
+  let primeUntil = 0;                // hasta cuándo se espera a que el vídeo tenga imagen al empezar
   let stageSize = { w: 1, h: 1 };
   let textDrag = null;
 
@@ -118,9 +119,69 @@
     return m.proxyPromise;
   }
 
+  // Vista previa fluida: los vídeos pesados (más de 720p, más de 30 fps o mucho bitrate) se
+  // reproducen desde una copia ligera de 720p con una imagen clave cada 15 (la exportación usa
+  // siempre el original). Los clips de juego traen una clave cada 4 s: cada salto del visor
+  // obligaba a decodificar hasta 250 imágenes y se quedaba repitiendo la misma. Mientras se
+  // prepara la copia (en segundo plano) se reproduce el original.
+  P.previewQuality = (() => { try { return localStorage.getItem('fg.previewQuality') || 'smooth'; } catch { return 'smooth'; } })();
+  function wantsEditProxy(m) {
+    const i = m.info;
+    return P.previewQuality === 'smooth' && i.kind === 'video' && !m.editFailed
+      && (i.height > 720 || i.width > 1280 || i.fps > 31 || i.bitrate > 12e6);
+  }
+
   function srcFor(m) {
     if (m.proxyUrl) return m.proxyUrl;
     if (m.info.needsProxy || m.forceProxy) { requestProxy(m); return null; }
+    if (wantsEditProxy(m)) {
+      if (m.editUrl) return m.editUrl;
+      requestEditProxy(m);
+    }
+    return m.info.url;
+  }
+
+  // Las copias se preparan de una en una, sin tapar el visor: el avance se ve en la cabecera.
+  const editQueue = [];
+  let editBusy = null;
+  function requestEditProxy(m) {
+    if (m.editQueued) return;
+    m.editQueued = true;
+    editQueue.push(m);
+    pumpEdit();
+  }
+  function pumpEdit() {
+    if (editBusy || !editQueue.length) { updatePq(); return; }
+    const m = (editBusy = editQueue.shift());
+    const id = `edit:${m.id}`;
+    updatePq(0);
+    const off = window.api.onJobProgress((d) => { if (d.id === id) updatePq(d.pct); });
+    window.api.editProxy(m.path, m.info, id)
+      .then((url) => { m.editUrl = url; })
+      .catch(() => { m.editFailed = true; })
+      .finally(() => { off(); editBusy = null; pumpEdit(); if (!P.playing) P.refresh(); });
+  }
+  function updatePq(pct) {
+    const el = $('#pq-status');
+    if (!el) return;
+    const left = editQueue.length + (editBusy ? 1 : 0);
+    el.hidden = !editBusy;
+    if (editBusy) el.textContent = `Optimizando vista previa${left > 1 ? ` (${left})` : ''}… ${Math.round((pct || 0) * 100)}%`;
+  }
+  P.setPreviewQuality = function (q) {
+    P.previewQuality = q === 'full' ? 'full' : 'smooth';
+    try { localStorage.setItem('fg.previewQuality', P.previewQuality); } catch { /* ignorar */ }
+    $$('#pq-toggle button').forEach((b) => b.classList.toggle('on', b.dataset.pq === P.previewQuality));
+    if (P.mode === 'source' && P.sourceMediaId) P.setSourceMedia(P.sourceMediaId);
+    else P.refresh();
+  };
+
+  // Audio de un vídeo (pistas de audio sacadas de un clip): se reproduce desde una copia solo de
+  // audio en lugar de abrir otra vez el MP4 entero.
+  function audioSrcFor(m) {
+    if (m.info.kind === 'audio') return m.info.url;
+    if (m.audioUrl) return m.audioUrl;
+    if (!m.audioPromise) m.audioPromise = window.api.audioProxy(m.path, m.info).then((u) => { m.audioUrl = u; }).catch(() => {});
     return m.info.url;
   }
 
@@ -230,15 +291,33 @@
     return clamp(f, 0, 1);
   }
 
-  // Sincroniza un elemento multimedia con el tiempo esperado.
+  function setRate(el, r) { if (Math.abs(el.playbackRate - r) > 1e-3) el.playbackRate = r; }
+
+  // Sincroniza un elemento multimedia con el reloj. Reproduciendo, los desfases pequeños se
+  // corrigen acelerando o frenando un poco (no se nota) y solo los grandes con un salto: como
+  // mucho uno cada 1,5 s y apuntando por delante lo que tarda en saltar. Saltar en cuanto se
+  // desfasaba 0,3 s dejaba el vídeo repitiendo la misma imagen y el audio a trompicones.
   function sync(el, expected, playing, rate) {
-    if (Math.abs(el.playbackRate - rate) > 1e-3) el.playbackRate = rate;
     if (playing) {
       if (el.paused) {
         if (Math.abs(el.currentTime - expected) > 0.04) el.currentTime = expected;
+        setRate(el, rate);
         el.play().catch(() => {});
-      } else if (Math.abs(el.currentTime - expected) > 0.3 && !el.seeking) el.currentTime = expected;
+        return;
+      }
+      if (el.seeking) return;
+      const st = el._sync || (el._sync = { at: 0, lat: 0.15 });
+      const d = expected - el.currentTime;   // > 0: va retrasado
+      const t = performance.now();
+      if (Math.abs(d) > 0.6 && t - st.at > 1500) {
+        st.at = t;
+        el.currentTime = Math.max(0, expected + (d > 0 ? st.lat * rate : 0));
+        el.addEventListener('seeked', () => { st.lat = clamp(0.6 * st.lat + 0.4 * (performance.now() - t) / 1000, 0.05, 1); }, { once: true });
+        setRate(el, rate);
+      } else if (Math.abs(d) > 0.025) setRate(el, rate * (1 + Math.round(clamp(d * 0.8, -0.12, 0.25) * 50) / 50));
+      else if (Math.abs(d) < 0.01) setRate(el, rate);
     } else {
+      setRate(el, rate);
       if (!el.paused) el.pause();
       if (Math.abs(el.currentTime - expected) > 0.008 && !el.seeking) el.currentTime = expected;
     }
@@ -266,6 +345,11 @@
       if (!L) break;
       loadInto(L, App.clip(id));
       owner.set(id, L);
+    }
+    for (const [id, L] of owner) {
+      const c = App.clip(id), m = App.clipMedia(c);
+      const src = m && srcFor(m);
+      if (src && L.src !== src && (!playing || !act.some((it) => it.clip.id === id))) loadInto(L, c);
     }
     const used = new Set(owner.values());
     layers.forEach((L) => { if (!used.has(L)) hideLayer(L); });
@@ -337,15 +421,16 @@
       let A = audioEls.get(a.id);
       const m = App.media(a.mediaId);
       if (!m || !m.info) continue;
+      const url = audioSrcFor(m);
       if (!A) {
         const el = new Audio();
         el.crossOrigin = 'anonymous';
         el.preload = 'auto';
-        el.src = m.info.url;
-        A = { el, gain: null, src: null, url: m.info.url };
+        el.src = url;
+        A = { el, gain: null, src: null, url };
         audioEls.set(a.id, A);
         connectAudio(A);
-      }
+      } else if (A.url !== url && A.el.paused) { A.url = url; A.el.src = url; }
       const len = a.out - a.in;
       const local = t - a.start;
       const active = playing && P.mode === 'sequence' && local >= 0 && local < len;
@@ -418,11 +503,21 @@
     if (state.playhead >= end - 0.02) state.playhead = 0;
     P.playing = true;
     clock = { wall: now(), head: state.playhead };
+    primeUntil = now() + 1.5;
     updatePlayButton();
+    boost(true);
   };
+
+  let boosted = false;
+  function boost(on) {
+    if (boosted === on || !window.api.playbackBoost) return;
+    boosted = on;
+    window.api.playbackBoost(on).catch(() => {});
+  }
 
   P.pause = function () {
     P.playing = false;
+    boost(false);
     layers.forEach((L) => { if (!L.video.paused) L.video.pause(); });
     audioEls.forEach((A) => { if (!A.el.paused) A.el.pause(); });
     updatePlayButton();
@@ -434,6 +529,7 @@
     if (P.mode !== 'sequence') P.setMode('sequence');
     state.playhead = clamp(t, 0, Math.max(0, P.endTime()));
     clock = { wall: now(), head: state.playhead };
+    if (P.playing) primeUntil = now() + 1.5;
     App.timeline.updatePlayhead();
     updateClock();
     renderFrame(state.playhead, P.playing);
@@ -467,20 +563,16 @@
         // (música que sigue tras el vídeo) manda el reloj de pared.
         const act = state.playhead < seq.total - 0.02 ? activeItems(seq, state.playhead) : [];
         const L = act.length ? layers.find((x) => x.clipId === act[0].clip.id) : null;
-        if (L && L.root.style.visibility !== 'hidden' && !L.video.ended) {
+        // Manda el reloj (como en los editores profesionales): si el vídeo se retrasa, es él quien
+        // se pone al día. Antes el reloj seguía al vídeo y, con el equipo cargado, todo iba a
+        // cámara lenta mientras el audio se desfasaba. Solo al empezar o tras saltar se espera
+        // (como mucho 1,5 s) a que el vídeo tenga imagen.
+        if (primeUntil && L && L.root.style.visibility !== 'hidden') {
           const v = L.video;
-          // Solo se congela el reloj si el vídeo de verdad no tiene imagen. Antes bastaba con que
-          // fuera justo de datos (readyState < 3), algo frecuente a pantalla completa con la GPU
-          // ocupada, y todo avanzaba a cámara lenta. Si se para, su currentTime tampoco avanza.
-          if (!L.ready || v.seeking || v.readyState < 2) {
-            // El vídeo aún no está listo: se congela el reloj para no adelantarse.
+          if ((!L.ready || v.seeking || v.readyState < 2) && now() < primeUntil) {
             t = state.playhead;
             clock = { wall: now(), head: t };
-          } else if (!v.paused) {
-            const it = act[0];
-            const tv = it.start + (v.currentTime - it.clip.in) / it.clip.speed;
-            if (Math.abs(tv - t) < 0.3) { t = tv; clock = { wall: now(), head: t }; }
-          }
+          } else primeUntil = 0;
         }
         const end = P.endTime();
         if (t >= end) { t = end; P.pause(); }
@@ -497,16 +589,28 @@
     requestAnimationFrame(tick);
   }
 
+  const shown = new Map();
+  let lastScrub = null;
+  function setText(sel, txt) {
+    if (shown.get(sel) === txt) return;
+    shown.set(sel, txt);
+    $(sel).textContent = txt;
+  }
+
   function updateClock() {
     const fps = P.outFps();
     let cur, total;
     if (P.mode === 'source') { const v = layers[0].video; cur = v.currentTime || 0; total = v.duration || 0; }
     else { cur = state.playhead; total = P.endTime(); }
-    $('#tc-current').textContent = Core.formatTimecode(cur, fps);
-    $('#tc-total').textContent = Core.formatTimecode(total, fps);
-    const f = total ? clamp(cur / total, 0, 1) : 0;
-    $('#scrub-fill').style.width = `${f * 100}%`;
-    $('#scrub-knob').style.left = `${f * 100}%`;
+    // Solo se toca el DOM cuando cambia algo: reescribirlo en cada fotograma también costaba.
+    setText('#tc-current', Core.formatTimecode(cur, fps));
+    setText('#tc-total', Core.formatTimecode(total, fps));
+    const f = total ? Math.round(clamp(cur / total, 0, 1) * 2000) / 20 : 0;
+    if (f !== lastScrub) {
+      lastScrub = f;
+      $('#scrub-fill').style.width = `${f}%`;
+      $('#scrub-knob').style.left = `${f}%`;
+    }
     const range = $('#scrub-range');
     if (P.mode === 'source' && total && (P.srcIn != null || P.srcOut != null)) {
       const a = (P.srcIn || 0) / total, b = (P.srcOut ?? total) / total;
@@ -777,6 +881,10 @@
     cropLayer = $('#crop-layer');
     cropBox = $('#crop-box');
     layers.push(makeLayer($('#layer-0'), 0), makeLayer($('#layer-1'), 1));
+    $$('#pq-toggle button').forEach((b) => {
+      b.classList.toggle('on', b.dataset.pq === P.previewQuality);
+      b.addEventListener('click', () => P.setPreviewQuality(b.dataset.pq));
+    });
     layers[0].video.addEventListener('pause', () => { if (P.mode === 'source' && P.playing) { P.playing = false; updatePlayButton(); } });
     layers[0].video.addEventListener('seeked', () => { if (P.mode === 'source') updateClock(); });
 

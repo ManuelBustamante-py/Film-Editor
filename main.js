@@ -2,6 +2,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, protocol } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const os = require('os');
 const { Readable } = require('stream');
 const engine = require('./src/engine');
 const captureHost = require('./src/capture-host');
@@ -167,6 +168,27 @@ ipcMain.handle('media:thumbnails', (_e, p, info) => engine.thumbnails(p, info));
 ipcMain.handle('media:waveform', (_e, p) => engine.waveform(p));
 ipcMain.handle('media:proxy', (e, p, info, id) =>
   engine.proxy(p, info, (pr) => { if (!e.sender.isDestroyed()) e.sender.send('job:progress', { id, ...pr }); }));
+ipcMain.handle('media:editProxy', (e, p, info, id) =>
+  engine.editProxy(p, info, (pr) => { if (!e.sender.isDestroyed()) e.sender.send('job:progress', { id, ...pr }); }));
+ipcMain.handle('media:audioProxy', (_e, p, info) => engine.audioProxy(p, info));
+// Mientras el editor reproduce, sus procesos (GPU, audio y, si Windows lo permite, la interfaz)
+// suben de prioridad en la CPU: con la captura o un juego ocupando el equipo, el visor ya no se
+// queda sin tiempo. El proceso de GPU además pasa a prioridad alta en la tarjeta (como la
+// captura y OBS) para decodificar y componer el vídeo a tiempo; se hace una vez por proceso.
+let gpuBoosted = null;
+ipcMain.handle('player:boost', (e, on) => {
+  const pr = on ? os.constants.priority.PRIORITY_ABOVE_NORMAL : os.constants.priority.PRIORITY_NORMAL;
+  const own = e.sender.getOSProcessId();
+  for (const m of app.getAppMetrics()) {
+    if (m.pid === own || m.type === 'GPU' || (m.type === 'Utility' && /audio/i.test(m.serviceName || ''))) {
+      try { os.setPriority(m.pid, pr); } catch { /* ignorar */ }
+    }
+    if (on && m.type === 'GPU' && gpuBoosted !== m.pid) {
+      gpuBoosted = m.pid;
+      require('./src/capture').setGpuPriority(m.pid, 'high').catch(() => {});
+    }
+  }
+});
 ipcMain.handle('engine:capabilities', () => engine.capabilities());
 
 ipcMain.handle('export:start', async (e, job) => {

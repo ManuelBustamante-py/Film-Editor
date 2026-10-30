@@ -1648,4 +1648,4 @@ class Capture extends EventEmitter {
   }
 }
 
-module.exports = { setEncoderPreference, buildArgs, convVariants, monitorMethod, benchmark, isMinimized, windowState, Capture, DEFAULTS, RESOLUTIONS, mergeDefaults, listAudioDevices, listMonitors, listWindows, captureCaps, resolveEncoder, pickPipeline };
+module.exports = { setEncoderPreference, setGpuPriority, buildArgs, convVariants, monitorMethod, benchmark, isMinimized, windowState, Capture, DEFAULTS, RESOLUTIONS, mergeDefaults, listAudioDevices, listMonitors, listWindows, captureCaps, resolveEncoder, pickPipeline };

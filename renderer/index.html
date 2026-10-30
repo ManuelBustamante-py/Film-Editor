@@ -67,6 +67,11 @@
             <button data-fit="contain" title="Encajar con bandas negras">Ajustar</button>
             <button data-fit="cover" title="Rellenar el lienzo recortando bordes">Rellenar</button>
           </div>
+          <div class="seg" id="pq-toggle" title="Vista previa del editor (la exportación usa siempre los archivos originales)">
+            <button data-pq="smooth" title="Fluida: copias ligeras de 720p preparadas en segundo plano. Recomendada para clips de 1080p o 60 fps">Fluida</button>
+            <button data-pq="full" title="Original: reproduce los archivos tal cual (más nitidez, más exigente)">Original</button>
+          </div>
+          <span class="pq-status" id="pq-status" hidden></span>
           <span class="spacer"></span>
           <span class="out-info" id="out-info"></span>
           <button class="btn small ghost icon-only" id="btn-fullscreen" title="Pantalla completa (F)"><span data-icon="maximize"></span></button>
@@ -153,7 +158,7 @@
         </div>
         <div class="tl-top">
           <div class="tl-corner"></div>
-          <canvas id="tl-ruler"></canvas>
+          <div class="tl-ruler-wrap"><canvas id="tl-ruler"></canvas><div class="tl-ruler-head" id="tl-ruler-head"></div></div>
         </div>
         <div class="tl-body" id="tl-body">
           <div class="tl-heads" id="tl-heads"></div>
