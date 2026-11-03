@@ -8,6 +8,8 @@
     audioClips: [],      // clips de audio con posición libre
     textClips: [],       // textos superpuestos
     tracks: [],          // pistas de audio
+    videoMuted: false,   // pista de vídeo silenciada (botón M)
+    subs: {},            // subtítulos por medio: { track, lang, quality, segments: [{ s, e, t }] }
     selectedId: null,    // elemento seleccionado
     selKind: 'video',    // 'video' | 'audio' | 'text'
     selectedMediaId: null,
@@ -40,7 +42,7 @@
   const hist = { stack: [], index: -1 };
   const snap = () => JSON.stringify({
     mediaIds: state.mediaIds, clips: state.clips, audioClips: state.audioClips, textClips: state.textClips,
-    tracks: state.tracks, selectedId: state.selectedId, selKind: state.selKind,
+    tracks: state.tracks, videoMuted: state.videoMuted, subs: state.subs, selectedId: state.selectedId, selKind: state.selKind,
   });
 
   function restore(s) {
@@ -341,7 +343,7 @@
       return {
         path: m.path, srcW: i.width, srcH: i.height, srcFps: i.fps, srcFpsStr: i.fpsStr,
         srcDuration: i.duration, srcSize: i.size, sar: i.sar, hasAudio: i.hasAudio,
-        in: c.in, out: c.out, speed: c.speed, volume: c.volume, muted: c.muted,
+        in: c.in, out: c.out, speed: c.speed, volume: c.volume, muted: c.muted || state.videoMuted,
         fadeIn: c.fadeIn, fadeOut: c.fadeOut, rotate: c.rotate, flipH: c.flipH, flipV: c.flipV,
         crop: c.crop, color: c.color, transOut: c.transOut,
       };

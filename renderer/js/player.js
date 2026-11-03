@@ -68,9 +68,13 @@
     layers.forEach(connectLayer);
     audioEls.forEach(connectAudio);
   }
+  let recordMute = false;      // grabando voz sin escuchar el proyecto
   function applyMaster() {
-    if (master) master.gain.value = P.previewMuted ? 0 : P.previewVolume;
+    if (master) master.gain.value = P.previewMuted || recordMute ? 0 : P.previewVolume;
   }
+  P.setRecordMute = function (on) { recordMute = !!on; applyMaster(); };
+  // Reloj del visor (cabezal = head + (ahora − wall)): la grabación de voz lo usa para colocar la toma.
+  P.clockState = () => ({ ...clock });
   function connectLayer(L) {
     if (!actx || L.gain) return;
     L.src = actx.createMediaElementSource(L.video);
@@ -154,19 +158,25 @@
     if (editBusy || !editQueue.length) { updatePq(); return; }
     const m = (editBusy = editQueue.shift());
     const id = `edit:${m.id}`;
-    updatePq(0);
-    const off = window.api.onJobProgress((d) => { if (d.id === id) updatePq(d.pct); });
+    pqPct = 0;
+    updatePq();
+    const off = window.api.onJobProgress((d) => { if (d.id === id) { pqPct = d.pct; updatePq(); }; });
     window.api.editProxy(m.path, m.info, id)
       .then((url) => { m.editUrl = url; })
       .catch(() => { m.editFailed = true; })
       .finally(() => { off(); editBusy = null; pumpEdit(); if (!P.playing) P.refresh(); });
   }
-  function updatePq(pct) {
+  // La copia se prepara solo con el visor parado: reproduciendo queda en pausa para no quitarle
+  // CPU (antes daba tirones a ratos en las grabaciones largas).
+  let pqPct = 0;
+  function updatePq() {
     const el = $('#pq-status');
     if (!el) return;
     const left = editQueue.length + (editBusy ? 1 : 0);
     el.hidden = !editBusy;
-    if (editBusy) el.textContent = `Optimizando vista previa${left > 1 ? ` (${left})` : ''}… ${Math.round((pct || 0) * 100)}%`;
+    if (editBusy) {
+      el.textContent = `Optimizando vista previa${left > 1 ? ` (${left})` : ''}… ${Math.round(pqPct * 100)}%${P.playing ? ' · en pausa mientras reproduces' : ''}`;
+    }
   }
   P.setPreviewQuality = function (q) {
     P.previewQuality = q === 'full' ? 'full' : 'smooth';
@@ -373,7 +383,7 @@
       layoutLayer(L, c);
       const local = t - it.start;
       const env = fadeEnv(c, local, it.dur);
-      let op = env, gain = c.muted ? 0 : c.volume * env;
+      let op = env, gain = c.muted || state.videoMuted ? 0 : c.volume * env;
       if (act.length === 2) {
         const incoming = k === 1;
         const q = incoming ? p : 1 - p;
@@ -513,9 +523,12 @@
     if (boosted === on || !window.api.playbackBoost) return;
     boosted = on;
     window.api.playbackBoost(on).catch(() => {});
+    updatePq();
+    App.subs.onPlayback();
   }
 
   P.pause = function () {
+    App.voiceover.onTransport();
     P.playing = false;
     boost(false);
     layers.forEach((L) => { if (!L.video.paused) L.video.pause(); });
@@ -526,6 +539,7 @@
   P.toggle = () => (P.playing ? P.pause() : P.play());
 
   P.seek = function (t) {
+    App.voiceover.onTransport();
     if (P.mode !== 'sequence') P.setMode('sequence');
     state.playhead = clamp(t, 0, Math.max(0, P.endTime()));
     clock = { wall: now(), head: state.playhead };
@@ -586,6 +600,7 @@
       if ((P.srcOut != null && v.currentTime >= P.srcOut) || v.ended) P.pause();
       updateClock();
     }
+    App.subs.render();
     requestAnimationFrame(tick);
   }
 

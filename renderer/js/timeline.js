@@ -60,8 +60,9 @@
     if (c.rotate || c.flipH || c.flipV || c.crop) badges.push(h('span', { class: 'cb' }, '⤢'));
     if (c.muted) badges.push(h('span', { class: 'cb mute' }, 'MUTE'));
     el.appendChild(h('div', { class: 'clip-label' }, ...badges, h('span', { class: 'name' }, m.name)));
-    const wave = h('div', { class: `clip-wave${m.info.hasAudio && !c.muted ? '' : ' none'}` });
-    if (m.info.hasAudio && !c.muted) {
+    const silent = c.muted || state.videoMuted;
+    const wave = h('div', { class: `clip-wave${m.info.hasAudio && !silent ? '' : ' none'}` });
+    if (m.info.hasAudio && !silent) {
       // La forma de onda se estira con la velocidad del clip.
       waveStyle(wave, m, c.in, c.out, w);
       wave.style.opacity = String(clamp(0.35 + c.volume * 0.65, 0.35, 1));
@@ -156,7 +157,11 @@
 
     // Vídeo
     headsEl.appendChild(h('div', { class: 'tl-head video tl-vhead' },
-      h('div', { class: 'hl', html: icon('film') }, h('span', { class: 'nm' }, 'Vídeo')), h('span', { class: 'tag' }, 'V1')));
+      h('div', { class: 'hl', html: icon('film') }, h('span', { class: 'nm' }, 'Vídeo')),
+      h('div', { class: 'ctrls' },
+        h('button', { class: `th-btn m${state.videoMuted ? ' on' : ''}`, title: state.videoMuted ? 'Activar el audio de los vídeos' : 'Silenciar el audio de los vídeos (también al exportar)',
+          onclick: () => { state.videoMuted = !state.videoMuted; App.commit(); } }, 'M'),
+        h('span', { class: 'tag' }, 'V1'))));
     const vRow = h('div', { class: 'tl-row video', 'data-row': 'video' });
     const rowH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--row-video'), 10) || 86;
     if (!seq.items.length) vRow.appendChild(h('div', { class: 'tl-empty' }, 'Arrastra vídeos aquí desde la biblioteca o el explorador'));
@@ -175,6 +180,22 @@
     });
     if (seq.total > 0 && end > seq.total) vRow.appendChild(h('div', { class: 'tl-after', style: { left: `${seq.total * zoom}px`, width: `${(end - seq.total) * zoom}px` }, title: 'Fuera del vídeo: no se exporta' }));
     rowsEl.appendChild(vRow);
+
+    // Subtítulos (solo si algún clip los tiene): se corrigen con doble clic.
+    if (App.subs.hasAny()) {
+      headsEl.appendChild(h('div', { class: 'tl-head subs tl-shead' },
+        h('div', { class: 'hl', html: icon('type') }, h('span', { class: 'nm' }, 'Subtítulos')),
+        h('button', { class: `th-btn${App.subs.visible ? ' on' : ''}`, title: App.subs.visible ? 'Ocultar en el visor (C)' : 'Mostrar en el visor (C)', html: icon('eye'),
+          onclick: () => { App.subs.toggleVisible(); T.render(); } })));
+      const sRow = h('div', { class: 'tl-row subs', 'data-row': 'subs' });
+      for (const q of App.subs.timelineCues()) {
+        sRow.appendChild(h('div', {
+          class: 'tl-sub', 'data-m': q.mediaId, 'data-k': q.k, title: `${q.text}\nDoble clic para corregir`,
+          style: { left: `${q.start * zoom}px`, width: `${Math.max(3, (q.end - q.start) * zoom - 1)}px` },
+        }, q.text));
+      }
+      rowsEl.appendChild(sRow);
+    }
 
     // Audio
     state.tracks.forEach((t) => {
@@ -544,6 +565,15 @@
       const tr = e.target.closest('[data-trans]');
       if (tr) { e.stopPropagation(); openTransition(Number(tr.dataset.trans), tr); return; }
       closePopover();
+      const sub = e.target.closest('.tl-sub');
+      if (sub) {
+        if (sub.classList.contains('editing')) return;
+        const mid = sub.dataset.m, k = Number(sub.dataset.k);
+        if (e.detail >= 2) { App.subs.startEdit(sub, mid, k); return; }
+        if (App.player.mode !== 'sequence') App.player.setMode('sequence');
+        App.player.seek((sub.offsetLeft + 1) / state.zoom);
+        return;
+      }
       contentEl.setPointerCapture(e.pointerId);
       if (App.player.mode !== 'sequence') App.player.setMode('sequence');
       const handle = e.target.closest('.clip-handle');
@@ -559,6 +589,8 @@
       if (App.player.mode !== 'sequence') App.player.setMode('sequence');
       const tr = e.target.closest('[data-trans]');
       if (tr) { e.preventDefault(); openTransition(Number(tr.dataset.trans), tr); return; }
+      const sub = e.target.closest('.tl-sub');
+      if (sub) { App.subs.menu(e, sub.dataset.m, Number(sub.dataset.k)); return; }
       App.ctx.timelineMenu(e, timeAt);
     });
     document.addEventListener('pointerdown', (e) => { if (popover && !popover.contains(e.target) && !e.target.closest('[data-trans]')) closePopover(); });

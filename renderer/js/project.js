@@ -15,6 +15,8 @@
       audioClips: state.audioClips,
       textClips: state.textClips,
       tracks: state.tracks,
+      videoMuted: state.videoMuted,
+      subs: Object.fromEntries(Object.entries(state.subs).filter(([id]) => state.mediaIds.includes(id))),
     };
   }
 
@@ -41,6 +43,8 @@
     state.audioClips = [];
     state.textClips = [];
     state.tracks = [App.newTrack('Audio 1')];
+    state.videoMuted = false;
+    state.subs = {};
     state.selectedId = null;
     state.selectedMediaId = null;
     state.playhead = 0;
@@ -61,6 +65,8 @@
       ...Core.defaultClipProps(), ...c, color: { ...Core.defaultColor(), ...(c.color || {}) },
     }));
     if (d.tracks && d.tracks.length) state.tracks = d.tracks;
+    state.videoMuted = !!d.videoMuted;
+    state.subs = Object.fromEntries(Object.entries(d.subs || {}).filter(([id]) => store.has(id)));
     state.audioClips = (d.audioClips || []).filter((a) => store.has(a.mediaId) && state.tracks.some((t) => t.id === a.trackId));
     state.textClips = (d.textClips || []).map((t) => ({ ...Core.defaultText(), ...t }));
     state.settings = { ...Core.defaultSettings(), ...(d.settings || {}) };

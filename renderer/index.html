@@ -72,8 +72,11 @@
             <button data-pq="full" title="Original: reproduce los archivos tal cual (más nitidez, más exigente)">Original</button>
           </div>
           <span class="pq-status" id="pq-status" hidden></span>
+          <span class="rec-status" id="rec-status" hidden><i class="dot"></i>REC <span class="t"></span><span class="lvl"><span></span></span><button class="x" title="Detener la grabación (R)">■</button></span>
+          <span class="subs-status" id="subs-status" hidden><span></span><button class="x" title="Cancelar">✕</button></span>
           <span class="spacer"></span>
           <span class="out-info" id="out-info"></span>
+          <button class="btn small ghost cc-btn" id="btn-cc" title="Subtítulos (C)">CC</button>
           <button class="btn small ghost icon-only" id="btn-fullscreen" title="Pantalla completa (F)"><span data-icon="maximize"></span></button>
         </div>
         <div id="stage-wrap">
@@ -83,6 +86,8 @@
             <div id="flash"></div>
             <div id="audio-poster" hidden><div class="ap-icon" data-icon="music"></div><div class="ap-wave" id="ap-wave"></div><div class="ap-name" id="ap-name"></div></div>
             <canvas id="text-layer"></canvas>
+            <div id="subs-layer" hidden><span></span></div>
+            <div id="rec-count" hidden></div>
             <div id="crop-layer" hidden>
               <div id="crop-box">
                 <div class="crop-grid"></div>
@@ -146,6 +151,7 @@
           <span class="sep"></span>
           <button class="btn small ghost" id="tl-add-text" title="Añadir texto en el cabezal (T)"><span data-icon="type"></span>Texto</button>
           <button class="btn small ghost" id="tl-add-audio" title="Importar música o efectos de sonido"><span data-icon="music"></span>Música</button>
+          <button class="btn small ghost" id="tl-voice" title="Grabar tu voz sobre el vídeo (R)"><span data-icon="mic"></span>Grabar voz</button>
           <button class="btn small ghost" id="tl-add-track" title="Nueva pista de audio"><span data-icon="plus"></span>Pista</button>
           <span class="sep"></span>
           <button class="btn small ghost icon-only" id="tl-snap" title="Imán: ajustar a bordes y cabezal (N)"><span data-icon="magnet"></span></button>
@@ -209,6 +215,8 @@
   <script src="js/text.js"></script>
   <script src="js/library.js"></script>
   <script src="js/player.js"></script>
+  <script src="js/subtitles.js"></script>
+  <script src="js/voiceover.js"></script>
   <script src="js/timeline.js"></script>
   <script src="js/inspector.js"></script>
   <script src="js/contextmenu.js"></script>

@@ -137,6 +137,17 @@
     return h('div', { class: 'group' }, h('div', { class: 'gl' }, label), ...children);
   }
 
+  const SUBS_MODES = [
+    { id: 'none', label: 'No incluir' }, { id: 'burn', label: 'Grabados en el vídeo' },
+    { id: 'file', label: 'Archivo .srt aparte' }, { id: 'both', label: 'Grabados y archivo .srt' },
+  ];
+  let subsMode = (() => { try { return localStorage.getItem('fg.exportSubs') || 'none'; } catch { return 'none'; } })();
+  function jobSubs(ns) {
+    if (subsMode === 'none' || !App.subs.hasAny()) return null;
+    const cues = App.subs.timelineCues().map((q) => ({ start: q.start, end: q.end, text: q.text }));
+    return { burn: !ns.audioOnly && (subsMode === 'burn' || subsMode === 'both'), file: subsMode === 'file' || subsMode === 'both', cues };
+  }
+
   E.open = function () {
     if (!state.clips.length) return toast('Añade al menos un clip a la línea de tiempo para exportar', 'warn');
     if (App.player.playing) App.player.pause();
@@ -316,6 +327,14 @@
           h('label', { class: 'field' }, h('span', null, 'Canales'), select(String(s.channels || 'original'), Core.CHANNELS, (v) => set({ channels: v })))));
       }
       form.appendChild(audioGroup);
+
+      if (App.subs.hasAny()) {
+        const subsGroup = group('Subtítulos',
+          h('label', { class: 'field' }, h('span', null, 'Incluir subtítulos'),
+            select(subsMode, SUBS_MODES, (v) => { subsMode = v; try { localStorage.setItem('fg.exportSubs', v); } catch { /* ignorar */ } })));
+        subsGroup.appendChild(h('div', { class: 'hint' }, 'Grabados: se ven en cualquier reproductor y red social. Archivo .srt: se guarda junto al vídeo con el mismo nombre y se puede activar o desactivar.'));
+        form.appendChild(subsGroup);
+      }
     }
 
     function renderSummary() {
@@ -378,7 +397,7 @@
       footEl.hidden = true;
       const texts = await App.jobTexts(plan);
       await App.runJob({
-        job: { clips, texts, audios: App.jobAudios(), settings: ns, outputPath: out },
+        job: { clips, texts, audios: App.jobAudios(), settings: ns, outputPath: out, subs: jobSubs(ns) },
         host,
         title: 'Exportando vídeo…',
         onLock: (v) => m.setLocked(v),

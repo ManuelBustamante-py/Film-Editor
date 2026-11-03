@@ -6,8 +6,8 @@ Editor de vídeo y audio de escritorio para Windows, con captura de pantalla y c
 
 Descarga los ejecutables y el manual desde **Releases**:
 
-- **`Fotograma-Studio-Setup-3.1.0.exe`**: instalador. Crea accesos directos en el escritorio y en el menú Inicio, y asocia los proyectos `.fgproj`.
-- **`Fotograma-Studio-Portable-3.1.0.exe`**: no necesita instalación; se abre con doble clic.
+- **`Fotograma-Studio-Setup-3.3.0.exe`**: instalador. Crea accesos directos en el escritorio y en el menú Inicio, y asocia los proyectos `.fgproj`.
+- **`Fotograma-Studio-Portable-3.3.0.exe`**: no necesita instalación; se abre con doble clic.
 - **`Manual de usuario - Fotograma Studio.pdf`**: guía completa con capturas y casos de uso.
 
 Ambos ejecutables incluyen un FFmpeg moderno, así que no hace falta instalar nada más. Al abrir la app por primera vez, detecta la tarjeta gráfica (NVIDIA, AMD o Intel, dedicada o integrada), el procesador y las pantallas, y se configura sola. Como no están firmados digitalmente, Windows SmartScreen puede avisar la primera vez: pulsa «Más información» → «Ejecutar de todas formas».
@@ -18,8 +18,8 @@ Ambos ejecutables incluyen un FFmpeg moderno, así que no hace falta instalar na
 npm install                 # si Electron no se descarga: node node_modules/electron/install.js
 npm start                   # abre la app en modo desarrollo
 npm test                    # prueba de extremo a extremo del motor
-npm run vendor              # copia el FFmpeg del PATH a vendor/ffmpeg (se incluye en los .exe)
-npm run dist                # copia FFmpeg y genera los .exe en dist/
+npm run vendor              # copia el FFmpeg del PATH a vendor/ffmpeg y descarga whisper.cpp a vendor/whisper (se incluyen en los .exe)
+npm run dist                # copia FFmpeg y whisper.cpp y genera los .exe en dist/
 npm run icon                # regenera build/icon.png
 ```
 
@@ -42,15 +42,23 @@ npm run icon                # regenera build/icon.png
 - **Estirar a 1920×1080 (16:9)**, igual que `escalador.bat` (x264 CRF 18, audio copiado).
 
 **Editor multipista**
-- Pista de textos (T1), pista de vídeo (V1) y pistas de audio ilimitadas (MP3, WAV, M4A, FLAC, OGG…), cada una con silencio, solo y volumen.
+- Pista de textos (T1), pista de vídeo (V1, con botón **M** para silenciar el audio de los vídeos) y pistas de audio ilimitadas (MP3, WAV, M4A, FLAC, OGG…), cada una con silencio, solo y volumen.
 - Vídeo: unir, reordenar, recortar arrastrando los bordes, dividir y transiciones (disolver, fundido a negro, destello blanco, barridos, deslizar, círculo).
 - Audio: mover libremente, cambiar de pista, recortar, volumen hasta el 200 % y fundidos.
 - Textos: fuente, tamaño, color, negrita y cursiva, alineación, fondo, contorno, sombra, fundidos, y arrastrarlos directamente en el visor.
 - Imán (N) para ajustar a bordes y al cabezal. Deshacer y rehacer. Proyectos `.fgproj`.
 
+**Grabar voz** (voz en off)
+- Botón «Grabar voz» de la línea de tiempo (R): eliges micrófono (con medidor de nivel), pista y si escuchas el proyecto; tras una cuenta atrás, el vídeo corre desde el cabezal mientras hablas. Al parar (R, Espacio o ■) la toma queda como clip de audio en la pista «Voz», sincronizada al fotograma; cada toma nueva que se solape va a otra pista. Los WAV se guardan en Música/Fotograma Studio.
+
+**Subtítulos automáticos** (Whisper, sin conexión)
+- Botón **CC** del visor o clic derecho → «Generar subtítulos…»: idioma, pista de audio (la del juego o el micrófono da mejor resultado que la mezcla con música) y calidad Precisa o Rápida. El modelo (60 o 190 MB) se descarga una vez; el audio nunca sale del equipo.
+- Se ven sobre el visor mientras editas (C para ocultarlos), siguen al clip al recortarlo, moverlo o cambiarle la velocidad, y se corrigen con doble clic en su pista.
+- Al exportar: grabados en el vídeo, en un `.srt` al lado o ambos.
+
 **Vista previa**
 - Doble capa de vídeo para cambiar de clip sin cortes y ver las transiciones en vivo.
-- **Vista previa fluida** (por defecto): los clips de 1080p o 60 fps se reproducen desde copias ligeras de 720p con una imagen clave cada 15, preparadas en segundo plano, y el audio de los vídeos desde una copia solo de audio. El reloj manda y el vídeo se pone al día sin saltos, así que la reproducción va a tiempo aunque el equipo esté cargado (captura, juego…). «Original» reproduce los archivos tal cual; la exportación usa siempre los originales.
+- **Vista previa fluida** (por defecto): los clips de 1080p o 60 fps se reproducen desde copias ligeras de 720p con una imagen clave cada 15, preparadas en segundo plano por tramos de 30 s (se reanudan si cierras la app y se pausan mientras reproduces, para no quitarle CPU al visor), y el audio de los vídeos desde una copia solo de audio. El reloj manda y el vídeo se pone al día sin saltos, así que la reproducción va a tiempo aunque el equipo esté cargado (captura, juego…). «Original» reproduce los archivos tal cual; la exportación usa siempre los originales.
 - Mezcla de audio en tiempo real (vídeo y música sincronizados, volumen por encima del 100 %).
 - Textos, color, rotación y encuadre tal y como se exportan. Pantalla completa (F).
 
@@ -87,6 +95,8 @@ npm run icon                # regenera build/icon.png
 | T | Añadir texto |
 | N | Activar / desactivar imán |
 | F | Pantalla completa |
+| C | Mostrar / ocultar subtítulos |
+| R | Grabar voz / detener |
 | Supr | Eliminar |
 | Ctrl+D | Duplicar |
 | Ctrl+Z / Ctrl+Y | Deshacer / rehacer |
@@ -103,11 +113,12 @@ preload.js           puente seguro hacia la interfaz
 src/engine.js        motor FFmpeg: análisis, miniaturas, proxies, exportación y codificación de audio
 src/capture.js       captura: búfer de repetición, grabación, sincronía y calibración
 src/capture-host.js  ajustes, atajos globales, bandeja, ventana de voz e IPC de la captura
+src/subtitles.js     subtítulos automáticos con whisper.cpp (modelos, tramos, detección de voz)
 preload-voice.js     puente de la ventana oculta de reconocimiento de voz
 src/system.js        detección del equipo (GPU, CPU, RAM, pantallas) y configuración recomendada
 src/audio-identify.js identifica qué programa suena en cada fuente de audio
 src/shared/core.js   lógica compartida: color, transiciones, formatos, resolución, fps y bitrate
 renderer/            interfaz (HTML, CSS y módulos JS; studio.js = Audio Studio, capture.js = Captura, voice.js = voz)
-scripts/             arranque en desarrollo, generación del icono y copia de FFmpeg (vendor-ffmpeg.js)
+scripts/             arranque en desarrollo, generación del icono, copia de FFmpeg (vendor-ffmpeg.js) y de whisper.cpp (vendor-whisper.js)
 test/engine-test.js  prueba de extremo a extremo del motor
 ```

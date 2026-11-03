@@ -6,6 +6,7 @@ const os = require('os');
 const { Readable } = require('stream');
 const engine = require('./src/engine');
 const captureHost = require('./src/capture-host');
+const subtitles = require('./src/subtitles');
 
 const VIDEO_EXT = ['mp4', 'mov', 'mkv', 'webm', 'avi', 'm4v', 'wmv', 'flv', 'mpg', 'mpeg', 'ts', 'mts', 'm2ts', '3gp', 'ogv', 'mxf', 'vob'];
 const AUDIO_EXT = ['mp3', 'wav', 'm4a', 'aac', 'flac', 'ogg', 'opus', 'wma', 'aiff', 'aif'];
@@ -177,6 +178,7 @@ ipcMain.handle('media:audioProxy', (_e, p, info) => engine.audioProxy(p, info));
 // captura y OBS) para decodificar y componer el vídeo a tiempo; se hace una vez por proceso.
 let gpuBoosted = null;
 ipcMain.handle('player:boost', (e, on) => {
+  engine.setPlaybackActive(on);
   const pr = on ? os.constants.priority.PRIORITY_ABOVE_NORMAL : os.constants.priority.PRIORITY_NORMAL;
   const own = e.sender.getOSProcessId();
   for (const m of app.getAppMetrics()) {
@@ -198,7 +200,7 @@ ipcMain.handle('export:start', async (e, job) => {
   jobs.set(job.id, handle);
   try {
     const r = await handle.promise;
-    return { ok: true, path: r.path, size: r.size, elapsed: r.elapsed, encoder: r.encoder };
+    return { ok: true, path: r.path, size: r.size, elapsed: r.elapsed, encoder: r.encoder, subsPath: r.subsPath };
   } catch (err) {
     return { ok: false, cancelled: !!err.cancelled, error: err.message };
   } finally {
@@ -261,6 +263,20 @@ for (const [ch, fn] of [['media:exportTracks', engine.exportTracks], ['media:str
   });
 }
 
+// Subtítulos automáticos (Whisper, sin conexión).
+ipcMain.handle('subs:status', () => subtitles.status());
+ipcMain.handle('subs:transcribe', async (e, job) => {
+  const handle = subtitles.transcribe(job, (pr) => { if (!e.sender.isDestroyed()) e.sender.send('job:progress', { id: job.id, ...pr }); });
+  jobs.set(job.id, handle);
+  try {
+    return { ok: true, segments: await handle.promise };
+  } catch (err) {
+    return { ok: false, cancelled: !!err.cancelled, error: err.message };
+  } finally {
+    jobs.delete(job.id);
+  }
+});
+
 ipcMain.handle('job:cancel', (_e, id) => {
   const j = jobs.get(id);
   if (j) j.cancel();
@@ -321,6 +337,7 @@ else {
     protocol.handle('media', serveMedia);
     try {
       engine.init({ cacheDir: path.join(app.getPath('temp'), 'fotograma-studio-cache') });
+      subtitles.init({ modelsDir: path.join(app.getPath('userData'), 'whisper-models') });
     } catch (err) {
       dialog.showErrorBox('FFmpeg no encontrado', err.message);
       app.quit();

@@ -55,11 +55,11 @@ function waitEvent(el, ev, timeout = 15000) {
   });
 }
 
-function modal({ title, body, foot, wide, onClose }) {
+function modal({ title, body, foot, wide, narrow, onClose }) {
   const root = $('#modal-root');
   const close = () => { bd.remove(); document.removeEventListener('keydown', esc, true); onClose && onClose(); };
   const esc = (e) => { if (e.key === 'Escape' && bd.dataset.lock !== '1') { e.stopPropagation(); close(); } };
-  const m = h('div', { class: 'modal', style: wide ? { width: 'min(1040px, 100%)' } : null },
+  const m = h('div', { class: 'modal', style: wide ? { width: 'min(1040px, 100%)' } : narrow ? { width: 'min(520px, 100%)' } : null },
     h('div', { class: 'modal-head' }, h('h2', null, title),
       h('button', { class: 'btn ghost icon-only', html: icon('x'), title: 'Cerrar', onclick: () => bd.dataset.lock !== '1' && close() })),
     h('div', { class: 'modal-body' }, body),

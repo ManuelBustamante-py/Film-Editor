@@ -25,6 +25,9 @@ const samples = {
   b: gen('b_1080p60.mp4', ['-f', 'lavfi', '-i', 'testsrc2=s=1920x1080:r=60:d=3', '-f', 'lavfi', '-i', 'sine=f=660:d=3',
     '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest']),
   c: gen('c_vertical25_noaudio.mp4', ['-f', 'lavfi', '-i', 'testsrc=s=720x1280:r=25:d=3', '-c:v', 'libx264', '-pix_fmt', 'yuv420p']),
+  // Más de dos tramos de 30 s: la copia de vista previa se hace por partes y se une.
+  e: gen('e_long_360p60.mp4', ['-f', 'lavfi', '-i', 'testsrc2=s=640x360:r=60:d=65', '-f', 'lavfi', '-i', 'sine=f=550:d=65',
+    '-c:v', 'libx264', '-preset', 'ultrafast', '-g', '240', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest']),
   d: gen('d_480p24.webm', ['-f', 'lavfi', '-i', 'mandelbrot=s=640x480:r=24', '-f', 'lavfi', '-i', 'sine=f=330:d=2',
     '-t', '2', '-c:v', 'libvpx-vp9', '-b:v', '500k', '-c:a', 'libopus', '-shortest']),
 };
@@ -260,6 +263,32 @@ async function job(name, clips, settings, expect) {
   const aud = fileOf(await engine.audioProxy(samples.b, infoB));
   const pa = ffprobe(aud);
   check(pa.acodec === 'aac' && pa.width === undefined && Math.abs(pa.duration - infoB.duration) < 0.1, 'audio aparte de un vídeo (sin imagen)');
+
+  const infoE = await engine.probe(samples.e);
+  const longEdit = fileOf(await engine.editProxy(samples.e, infoE));
+  const pl = ffprobe(longEdit);
+  const frames = Number(execFileSync(engine.bin.ffprobe, ['-v', 'error', '-select_streams', 'v:0', '-count_packets', '-show_entries', 'stream=nb_read_packets', '-of', 'csv=p=0', longEdit]).toString().trim());
+  check(frames === 65 * 60 && Math.abs(pl.duration - infoE.duration) < 0.1 && pl.acodec === 'aac',
+    `copia por tramos de un vídeo de 65 s: ${frames} imágenes, ${pl.duration.toFixed(2)} s, con audio`);
+  check(!fs.existsSync(longEdit.replace(/_edit\.mp4$/, '_edit.parts')), 'los tramos se borran al unirlos');
+
+  // 12. Subtítulos: formato SRT, limpieza del resultado de Whisper y exportación grabada.
+  console.log('▶ subtítulos');
+  const subs = require('../src/subtitles');
+  check(engine.srt([{ start: 1.5, end: 3.25, text: 'Hola\nmundo' }, { start: 3661.001, end: 3662, text: 'x' }])
+    === '1\n00:00:01,500 --> 00:00:03,250\nHola\nmundo\n\n2\n01:01:01,001 --> 01:01:02,000\nx\n', 'formato SRT');
+  const cl = subs.clean([{ s: 0, e: 1, t: ' [Música] ' }, { s: 1, e: 2, t: '- Hola' }, { s: 2, e: 3, t: 'otra' }, { s: 3, e: 4, t: 'otra' }, { s: 4, e: 5, t: 'otra' }, { s: 5, e: 6, t: '...' }]);
+  check(cl.length === 3 && cl[0].t === 'Hola' && cl[2].t === 'otra', 'limpieza: sin «[Música]», guiones ni repeticiones en bucle');
+  const pcm = new Int16Array(16000 * 300).map((_, i) => (Math.floor(i / 16000) % 60 === 58 ? 0 : 8000 * Math.sin(i / 7)));
+  const cuts = subs.quietCuts(pcm);
+  check(cuts.length === 4 && cuts.slice(1, -1).every((c) => Math.floor(c) % 60 === 58), `cortes de la transcripción en silencios (${cuts.map((c) => c.toFixed(1)).join(', ')})`);
+  {
+    const out = path.join(OUT, '19_subtitulos.mp4');
+    const r = await engine.exportVideo({ clips: [await clipFor(samples.a)], settings: Core.normalizeSettings({ format: 'mp4-h264', preset: 'ultrafast', rateMode: 'crf', crf: 30, hw: 'none' }),
+      outputPath: out, subs: { burn: true, file: true, cues: [{ start: 0.5, end: 2.5, text: 'Subtítulo de prueba ñ' }] } }).promise;
+    const srtOut = fs.readFileSync(out.replace(/\.mp4$/, '.srt'), 'utf8');
+    check(r.subsPath && /Subtítulo de prueba ñ/.test(srtOut) && ffprobe(out).duration > 3.9, 'exportación con subtítulos grabados y .srt al lado');
+  }
 
   console.log(failures ? `\n${failures} comprobación(es) fallida(s)` : '\nTodo correcto ✔');
   process.exit(failures ? 1 : 0);

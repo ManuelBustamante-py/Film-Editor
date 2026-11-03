@@ -134,6 +134,7 @@ function runFfmpeg(args, { cwd, duration, onProgress, priority } = {}) {
   });
   return {
     promise,
+    get pid() { return child && child.pid; },
     cancel() {
       cancelled = true;
       try { child && child.kill('SIGKILL'); } catch { /* ya terminado */ }
@@ -205,6 +206,8 @@ async function probe(file) {
   if (!(fps > 0 && fps <= 480)) { fpsStr = '30'; fps = 30; }
   // Simplifica fracciones habituales (p. ej. 60/1 → 60).
   if (/^\d+\/1$/.test(fpsStr)) fpsStr = fpsStr.split('/')[0];
+  // Frecuencia nominal (la media de una grabación de pantalla sale p. ej. 9496380/162359).
+  const rateStr = Core.parseFps(v.r_frame_rate) > 0 && Core.parseFps(v.r_frame_rate) <= 240 ? v.r_frame_rate : fpsStr;
 
   const duration = Number(j.format.duration) || Number(v.duration) || 0;
   const size = Number(j.format.size) || fs.statSync(file).size;
@@ -219,7 +222,7 @@ async function probe(file) {
     name: path.basename(file),
     url: mediaUrl(file),
     width: w, height: h, codedWidth: v.width, codedHeight: v.height, sar, rotation: rot,
-    fps, fpsStr, duration, size,
+    fps, fpsStr, rateStr, duration, size,
     bitrate: Number(j.format.bit_rate) || 0,
     vcodec, acodec, hasAudio: !!a,
     pixFmt: v.pix_fmt, container: j.format.format_name,
@@ -303,22 +306,72 @@ function proxy(file, info, onProgress) {
 // Copia ligera para que la vista previa del editor vaya fluida: 720p, una imagen clave cada 15
 // y decodificación rápida. Los clips de juego traen una clave cada 4 s y a 1080p60: cada salto
 // del visor obligaba a decodificar hasta 250 imágenes. La exportación usa siempre el original.
-// Se genera en segundo plano con prioridad baja (unas 6 veces más rápido que la duración).
+// Se hace por tramos de 30 s (reanudable si se cierra la app a mitad de una grabación larga) y
+// solo mientras el editor no reproduce: codificarla a la vez que se veía el original de 1080p60
+// le quitaba CPU al visor y daba tirones a ratos. Al final se unen los tramos sin recodificar y
+// se copia el audio del original.
+const EDIT_CHUNK = 30;
 const editJobs = new Map();
+const bgRunning = new Set();
+let playbackActive = false;
+let idleWaiters = [];
+function setPlaybackActive(on) {
+  playbackActive = !!on;
+  const pr = on ? os.constants.priority.PRIORITY_LOW : os.constants.priority.PRIORITY_BELOW_NORMAL;
+  for (const r of bgRunning) { try { os.setPriority(r.pid, pr); } catch { /* ya terminado */ } }
+  if (!on) { idleWaiters.forEach((f) => f()); idleWaiters = []; }
+}
+const whenIdle = () => (playbackActive ? new Promise((r) => idleWaiters.push(r)) : Promise.resolve());
+const bgPriority = () => (playbackActive ? os.constants.priority.PRIORITY_LOW : os.constants.priority.PRIORITY_BELOW_NORMAL);
+// Trabajo de fondo (copias, subtítulos): baja a la prioridad mínima mientras el editor reproduce.
+async function background(r) {
+  bgRunning.add(r);
+  try { return await r.promise; } finally { bgRunning.delete(r); }
+}
+
 function editProxy(file, info, onProgress) {
   const key = cacheKey(file);
   if (editJobs.has(key)) return editJobs.get(key);
   const out = path.join(cacheDir, `${key}_edit.mp4`);
-  const job = heavy(async () => {
+  const job = (async () => {
     if (exists(out)) return mediaUrl(out);
-    const part = out.replace(/\.mp4$/, '.part.mp4');
-    const args = ['-y', '-i', file, '-map', '0:v:0', '-map', '0:a:0?', '-vf', 'scale=-2:min(720\\,ih)',
-      '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'fastdecode', '-crf', '25', '-g', '15', '-bf', '0', '-threads', '4',
-      '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '160k', '-ac', '2', '-movflags', '+faststart', part];
-    await runFfmpeg(args, { duration: info.duration, onProgress, priority: os.constants.priority.PRIORITY_BELOW_NORMAL }).promise;
-    await fsp.rename(part, out);
+    await fsp.rm(out.replace(/\.mp4$/, '.part.mp4'), { force: true });  // copias a medias de la 3.2.0
+    const dir = path.join(cacheDir, `${key}_edit.parts`);
+    await fsp.mkdir(dir, { recursive: true });
+    const rate = info.rateStr || info.fpsStr || '30';
+    const fps = Core.parseFps(rate) || 30;
+    const per = Math.max(1, Math.round(EDIT_CHUNK * fps));
+    const n = Math.max(1, Math.ceil((info.duration * fps - 0.5) / per));
+    const report = (i, f) => onProgress && onProgress({ pct: Math.min(0.99, (i + f) / n), paused: playbackActive });
+    const names = [];
+    for (let i = 0; i < n; i++) {
+      const name = `${String(i).padStart(5, '0')}.mp4`;
+      names.push(name);
+      const f = path.join(dir, name);
+      if (exists(f)) continue;
+      report(i, 0);
+      await whenIdle();
+      await heavy(async () => {
+        const tmp = path.join(dir, `tmp_${name}`);
+        const args = ['-y', '-ss', ((i * per) / fps).toFixed(6), '-i', file, '-map', '0:v:0', '-an', '-sn', '-dn',
+          ...(i < n - 1 ? ['-frames:v', String(per)] : []), '-vf', 'scale=-2:min(720\\,ih)', '-r', rate, '-fps_mode', 'cfr',
+          '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'fastdecode', '-crf', '25', '-g', '15', '-bf', '0', '-threads', '4',
+          '-pix_fmt', 'yuv420p', tmp];
+        await background(runFfmpeg(args, { duration: EDIT_CHUNK, onProgress: (pr) => report(i, pr.pct), priority: bgPriority() }));
+        await fsp.rename(tmp, f);
+      });
+    }
+    const list = path.join(dir, 'list.txt');
+    await fsp.writeFile(list, names.map((x) => `file '${x}'`).join('\n'));
+    const joined = path.join(dir, 'joined.mp4');
+    await runFfmpeg(['-y', '-f', 'concat', '-safe', '0', '-i', list, '-i', file, '-map', '0:v:0', '-map', '1:a:0?', '-c:v', 'copy',
+      ...(info.acodec === 'aac' ? ['-c:a', 'copy'] : ['-c:a', 'aac', '-b:a', '160k', '-ac', '2']), '-movflags', '+faststart', joined],
+    { cwd: dir, priority: os.constants.priority.PRIORITY_BELOW_NORMAL }).promise;
+    await fsp.rename(joined, out);
+    await fsp.rm(dir, { recursive: true, force: true });
+    if (onProgress) onProgress({ pct: 1, paused: false });
     return mediaUrl(out);
-  }).finally(() => editJobs.delete(key));
+  })().finally(() => editJobs.delete(key));
   editJobs.set(key, job);
   return job;
 }
@@ -459,11 +512,25 @@ function musicChain(a, inputIndex, k) {
 }
 
 /**
- * job = { clips, texts?, audios? }
+ * job = { clips, texts?, audios?, subs? }
  *  - texts:  [{ file, start, duration, fadeIn, fadeOut }] (PNG a resolución de salida)
  *  - audios: [{ path, start, in, out, volume, fadeIn, fadeOut }]
+ *  - subs:   nombre del .srt (en la carpeta de trabajo) que se graba en la imagen
  * Índices de entrada: clips, después textos, después audios.
  */
+// Subtítulos grabados: blanco con borde negro, abajo y centrados (libass; tamaño relativo al alto).
+const SUB_STYLE = 'FontName=Arial,FontSize=17,Bold=1,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,BorderStyle=1,Outline=1.2,Shadow=0.5,MarginV=20';
+
+const srtTime = (t) => {
+  const ms = Math.max(0, Math.round(t * 1000));
+  const p = (n, w = 2) => String(n).padStart(w, '0');
+  return `${p(Math.floor(ms / 3600000))}:${p(Math.floor(ms / 60000) % 60)}:${p(Math.floor(ms / 1000) % 60)},${p(ms % 1000, 3)}`;
+};
+/** cues = [{ start, end, text }] en tiempo de la exportación → texto SRT. */
+function srt(cues) {
+  return cues.map((c, i) => `${i + 1}\n${srtTime(c.start)} --> ${srtTime(c.end)}\n${String(c.text).replace(/\r?\n+/g, '\n').trim()}\n`).join('\n');
+}
+
 function buildGraph(job, plan, s, withAudio) {
   const clips = job.clips, texts = job.texts || [], audios = withAudio ? job.audios || [] : [];
   const layout = Core.sequenceLayout(clips);
@@ -509,6 +576,10 @@ function buildGraph(job, plan, s, withAudio) {
     parts.push(`[${cv}][tx${k}]overlay=0:0:eof_action=pass:enable='between(t,${num(t.start, 4)},${num(t.start + t.duration, 4)})'[ov${k}]`);
     cv = `ov${k}`;
   });
+  if (job.subs) {
+    parts.push(`[${cv}]subtitles=${job.subs}:force_style='${SUB_STYLE}'[sub]`);
+    cv = 'sub';
+  }
   parts.push(`[${cv}]fps=${plan.fpsStr},format=${pixFmtFor(plan.codec)}[vout]`);
 
   if (withAudio) {
@@ -686,7 +757,13 @@ async function buildExport(job, workDir) {
 
   const texts = job.texts || [];
   const audios = (job.audios || []).filter((a) => a.start < plan.duration - 0.01 && a.out - a.in > 0.01);
-  const g = { clips, texts: [], audios };
+  const cues = ((job.subs && job.subs.cues) || []).filter((c) => c.start < plan.duration - 0.01 && c.end > c.start)
+    .map((c) => ({ ...c, end: Math.min(c.end, plan.duration) }));
+  const g = { clips, texts: [], audios, subs: null };
+  if (job.subs && job.subs.burn && cues.length && !s.audioOnly) {
+    await fsp.writeFile(path.join(workDir, 'subs.srt'), srt(cues), 'utf8');
+    g.subs = 'subs.srt';
+  }
   const inputs = [];
   for (const c of clips) {
     inputs.push('-ss', num(c.in, 6), '-t', num(c.out - c.in, 6), '-i', c.path);
@@ -756,7 +833,14 @@ function exportVideo(job, onProgress) {
         await current.promise;
       }
       const size = fs.statSync(job.outputPath).size;
-      return { path: job.outputPath, size, plan, encoder, elapsed: (Date.now() - started) / 1000 };
+      // Subtítulos en un archivo aparte, junto al vídeo y con el mismo nombre.
+      let subsPath = null;
+      if (job.subs && job.subs.file && job.subs.cues && job.subs.cues.length) {
+        subsPath = job.outputPath.replace(/\.[^.\\/]+$/, '') + '.srt';
+        const cues = job.subs.cues.filter((c) => c.start < plan.duration - 0.01).map((c) => ({ ...c, end: Math.min(c.end, plan.duration) }));
+        await fsp.writeFile(subsPath, '\ufeff' + srt(cues), 'utf8');
+      }
+      return { path: job.outputPath, size, plan, encoder, subsPath, elapsed: (Date.now() - started) / 1000 };
     } catch (e) {
       try { if (fs.existsSync(job.outputPath)) fs.unlinkSync(job.outputPath); } catch { /* ignorar */ }
       throw e;
@@ -982,6 +1066,8 @@ function stretchVideo(opts, onProgress) {
 module.exports = {
   exportTracks, stretchVideo, setHwPreference,
   cutAudio, extractAudio, encodeAudio, mediaUrl,
-  init, probe, thumbnails, waveform, proxy, editProxy, audioProxy, capabilities, exportVideo, buildExport, buildGraph,
+  srt, init, probe, thumbnails, waveform, proxy, editProxy, audioProxy, setPlaybackActive, whenIdle, background, bgPriority, runFfmpeg, cacheKey, capabilities, exportVideo, buildExport, buildGraph,
   get bin() { return { ...bin }; },
+  get cacheDir() { return cacheDir; },
+  get playbackActive() { return playbackActive; },
 };

@@ -6,6 +6,8 @@
   Icons.hydrate();
   App.library.init();
   App.player.init();
+  App.subs.init();
+  App.voiceover.init();
   App.timeline.init();
   App.inspector.init();
   App.studio.init();
@@ -125,6 +127,8 @@
         else if (k === 't') App.addText();
         else if (k === 'n') { state.snap = !state.snap; App.timeline.render(); toast(state.snap ? 'Imán activado' : 'Imán desactivado', 'info', 1200); }
         else if (k === 'f') App.player.toggleFullscreen();
+        else if (k === 'c') App.subs.toggleVisible();
+        else if (k === 'r') App.voiceover.recording ? App.voiceover.stop() : App.voiceover.open();
     }
   });
 

@@ -1,7 +1,7 @@
 {
   "name": "fotograma-studio",
   "productName": "Fotograma Studio",
-  "version": "3.2.0",
+  "version": "3.3.0",
   "description": "Editor de vídeo de escritorio con captura de pantalla y clips instantáneos: unir, recortar, comprimir, velocidad, fotogramas y filtros de color.",
   "main": "main.js",
   "author": "Manuel Bustamante",
@@ -10,8 +10,8 @@
     "start": "node scripts/start.js",
     "test": "node test/engine-test.js",
     "icon": "electron scripts/make-icon.js",
-    "vendor": "node scripts/vendor-ffmpeg.js",
-    "dist": "node scripts/vendor-ffmpeg.js && electron-builder --win nsis portable"
+    "vendor": "node scripts/vendor-ffmpeg.js && node scripts/vendor-whisper.js",
+    "dist": "node scripts/vendor-ffmpeg.js && node scripts/vendor-whisper.js && electron-builder --win nsis portable"
   },
   "build": {
     "appId": "com.fotograma.studio",
@@ -36,6 +36,10 @@
       {
         "from": "vendor/ffmpeg",
         "to": "ffmpeg"
+      },
+      {
+        "from": "vendor/whisper",
+        "to": "whisper"
       }
     ],
     "win": {

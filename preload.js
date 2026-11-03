@@ -11,6 +11,8 @@ contextBridge.exposeInMainWorld('api', {
   proxy: (p, info, id) => ipcRenderer.invoke('media:proxy', p, info, id),
   editProxy: (p, info, id) => ipcRenderer.invoke('media:editProxy', p, info, id),
   audioProxy: (p, info) => ipcRenderer.invoke('media:audioProxy', p, info),
+  subsStatus: () => ipcRenderer.invoke('subs:status'),
+  transcribe: (job) => ipcRenderer.invoke('subs:transcribe', job),
   playbackBoost: (on) => ipcRenderer.invoke('player:boost', on),
   capabilities: () => ipcRenderer.invoke('engine:capabilities'),
   startExport: (job) => ipcRenderer.invoke('export:start', job),
