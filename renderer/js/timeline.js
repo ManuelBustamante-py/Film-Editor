@@ -267,14 +267,33 @@
   // Durante la reproducción (follow) solo se mueve el cabezal, con transform (lo hace el
   // compositor, sin recalcular el diseño): leer la altura de las pistas y redibujar la regla en
   // cada fotograma le quitaba al vídeo el tiempo que necesitaba con el equipo cargado.
+  // Seguimiento del cabezal: si mientras se reproduce desplazas tú la línea de tiempo (rueda o
+  // barra), deja de seguirlo para que puedas mirarla entera; vuelve a seguirlo cuando el
+  // cabezal entra en la vista, al reproducir o al saltar a otro punto. Antes, cada fotograma te
+  // devolvía al cabezal.
+  let followOff = false;
+  let ownScroll = null;        // desplazamiento puesto por el programa (no cuenta como del usuario)
+  function setScroll(v) {
+    scrollEl.scrollLeft = Math.max(0, v);
+    ownScroll = scrollEl.scrollLeft;
+  }
+  function onScroll() {
+    if (ownScroll != null && Math.abs(scrollEl.scrollLeft - ownScroll) < 2) ownScroll = null;
+    else if (App.player.playing) followOff = true;
+    drawRuler();
+  }
+  T.resumeFollow = () => { followOff = false; };
+
   let playheadX = null;
   T.updatePlayhead = function (follow) {
     const x = Math.round(state.playhead * state.zoom * 2) / 2;
     if (x !== playheadX) { playheadX = x; playheadEl.style.transform = `translateX(${x}px)`; }
     if (follow) {
       const l = scrollEl.scrollLeft, w = scrollEl.clientWidth;
+      const inView = x >= l && x <= l + w - 40;
+      if (followOff && inView) followOff = false;
       // Al desplazarse, el evento scroll redibuja la regla.
-      if (x > l + w - 40 || x < l) scrollEl.scrollLeft = Math.max(0, x - 60);
+      if (!followOff && !inView) setScroll(x - 60);
       placeRulerHead();
       return;
     }
@@ -291,7 +310,7 @@
     const t = (scrollEl.scrollLeft + ax) / old;
     state.zoom = z;
     T.render();
-    scrollEl.scrollLeft = Math.max(0, t * z - ax);
+    setScroll(t * z - ax);
     drawRuler();
   };
   T.zoomBy = (f) => T.setZoom(state.zoom * f);
@@ -299,7 +318,7 @@
     const total = App.contentEnd();
     if (!total) return;
     T.setZoom((scrollEl.clientWidth - 40) / total);
-    scrollEl.scrollLeft = 0;
+    setScroll(0);
   };
 
   // ------------------------------------------------------------------ utilidades
@@ -605,7 +624,7 @@
       ruler.addEventListener('pointerup', up);
     });
 
-    scrollEl.addEventListener('scroll', drawRuler);
+    scrollEl.addEventListener('scroll', onScroll);
     bodyEl.addEventListener('wheel', (e) => {
       if (e.ctrlKey) {
         e.preventDefault();

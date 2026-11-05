@@ -499,6 +499,8 @@
   }
 
   P.play = function () {
+    // Con una grabación de voz en pausa, reproducir es reanudarla (para que no se pierda la toma).
+    if (App.voiceover.paused) { App.voiceover.resume(); return; }
     ensureAudio();
     if (P.mode === 'source') {
       const v = layers[0].video;
@@ -514,6 +516,7 @@
     P.playing = true;
     clock = { wall: now(), head: state.playhead };
     primeUntil = now() + 1.5;
+    App.timeline.resumeFollow();
     updatePlayButton();
     boost(true);
   };
@@ -536,7 +539,7 @@
     updatePlayButton();
   };
 
-  P.toggle = () => (P.playing ? P.pause() : P.play());
+  P.toggle = () => (App.voiceover.recording ? App.voiceover.togglePause() : P.playing ? P.pause() : P.play());
 
   P.seek = function (t) {
     App.voiceover.onTransport();
@@ -544,6 +547,7 @@
     state.playhead = clamp(t, 0, Math.max(0, P.endTime()));
     clock = { wall: now(), head: state.playhead };
     if (P.playing) primeUntil = now() + 1.5;
+    App.timeline.resumeFollow();
     App.timeline.updatePlayhead();
     updateClock();
     renderFrame(state.playhead, P.playing);
@@ -568,7 +572,17 @@
   P.toStart = () => (P.mode === 'source' ? (layers[0].video.currentTime = P.srcIn || 0) : P.seek(0));
   P.toEnd = () => (P.mode === 'source' ? (layers[0].video.currentTime = P.srcOut ?? (layers[0].video.duration || 0)) : P.seek(P.endTime()));
 
+  // El siguiente fotograma se pide antes de nada: si algo fallaba a mitad de un fotograma, el
+  // bucle moría y el vídeo seguía reproduciéndose solo con el cabezal (la línea roja) parado.
+  let tickErrors = 0;
   function tick() {
+    requestAnimationFrame(tick);
+    try { frame(); } catch (e) {
+      if (tickErrors++ < 5) console.error('Visor: error en un fotograma', e);
+    }
+  }
+
+  function frame() {
     if (P.mode === 'sequence') {
       if (P.playing) {
         let t = clock.head + (now() - clock.wall);
@@ -601,7 +615,6 @@
       updateClock();
     }
     App.subs.render();
-    requestAnimationFrame(tick);
   }
 
   const shown = new Map();

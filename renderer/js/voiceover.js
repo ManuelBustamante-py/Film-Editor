@@ -6,7 +6,7 @@
 (function () {
   const App = window.App;
   const { state } = App;
-  const V = (App.voiceover = { recording: false });
+  const V = (App.voiceover = { recording: false, paused: false });
   let rec = null;            // grabación en curso
   let chip, btn, countEl;
 
@@ -80,7 +80,7 @@
       return h('label', { class: 'check-row', title: hint || '' }, c, label);
     };
     const body = h('div', { class: 'vo-form' },
-      h('p', { class: 'muted' }, 'El proyecto se reproduce desde el cabezal mientras hablas. Al parar (R, Espacio o el botón rojo) tu voz queda como un clip de audio, en su sitio.'),
+      h('p', { class: 'muted' }, 'El proyecto se reproduce desde el cabezal mientras hablas. Espacio pausa y reanuda; al terminar (R o el botón rojo) tu voz queda como un clip de audio, en su sitio.'),
       h('label', { class: 'field' }, h('span', null, 'Micrófono'), micSel),
       meter,
       h('label', { class: 'field' }, h('span', null, 'Guardar en'), trackSel),
@@ -109,10 +109,14 @@
     const mute = ctx.createGain();
     mute.gain.value = 0;
     src.connect(node).connect(mute).connect(ctx.destination);
-    rec = { o, stream, ctx, node, chunks: [], offsets: [], startHead: 0, playing: false, peak: 0, t0: 0, stopping: false };
+    // segs: tramos grabados (uno por cada «reanudar»), cada uno con su reloj del visor y su
+    // tramo de la línea de tiempo. elapsed: tiempo grabado en los tramos ya cerrados.
+    rec = { o, stream, ctx, node, chunks: [], offsets: [], segs: [], seg: null, playing: false, paused: false, started: false,
+      acceptUntil: 0, elapsed: 0, peak: 0, t0: 0, stopping: false };
     node.port.onmessage = (e) => {
       if (!rec || rec.ctx !== ctx) return;
-      rec.chunks.push(e.data);
+      // En pausa no se guarda nada (salvo la cola que aún llega del tramo recién cerrado).
+      if (rec.playing || performance.now() < rec.acceptUntil) rec.chunks.push(e.data);
       let p = 0;
       for (let i = 0; i < e.data.data.length; i += 4) p = Math.max(p, Math.abs(e.data.data[i]));
       rec.peak = Math.max(rec.peak * 0.85, p);
@@ -124,14 +128,56 @@
       countEl.hidden = true;
       if (!rec) return;
     }
-    App.player.setRecordMute(!o.listen);
     if (state.playhead >= App.player.endTime() - 0.05) App.player.seek(0);
-    rec.startHead = state.playhead;
+    rec.started = true;
+    beginSeg();
+  }
+
+  // Empieza un tramo desde el cabezal: el proyecto vuelve a sonar y la voz se coloca ahí.
+  function beginSeg() {
+    App.player.setRecordMute(!rec.o.listen);
+    rec.seg = { startHead: state.playhead, endHead: 0, clock: null };
     rec.t0 = performance.now();
     rec.playing = true;
+    rec.paused = V.paused = false;
     App.player.play();
     loop();
   }
+
+  // Cierra el tramo en curso con el reloj del visor de ese momento (antes de parar el visor).
+  function closeSeg(r) {
+    const clock = App.player.clockState();
+    r.seg.clock = clock;
+    r.seg.endHead = clock.head + (performance.now() / 1000 - clock.wall);
+    r.segs.push(r.seg);
+    r.seg = null;
+    r.elapsed += performance.now() - r.t0;
+    r.playing = false;
+    // Lo que el micrófono captó justo antes de pausar aún tarda en llegar.
+    r.acceptUntil = performance.now() + 1000;
+  }
+
+  V.pause = function () {
+    if (!rec || !rec.playing || rec.stopping) return;
+    closeSeg(rec);
+    rec.paused = V.paused = true;
+    if (App.player.playing) App.player.pause();
+    App.player.setRecordMute(false);
+    updateUi();
+  };
+
+  V.resume = function () {
+    if (!rec || !rec.paused || rec.stopping) return;
+    if (App.player.mode !== 'sequence') App.player.setMode('sequence');
+    if (state.playhead >= App.player.endTime() - 0.05) return toast('El cabezal está al final: muévelo atrás para seguir grabando, o termina la grabación (R)', 'warn', 4500);
+    beginSeg();
+    updateUi();
+  };
+
+  V.togglePause = function () {
+    if (!rec || !rec.started) return;
+    if (rec.paused) V.resume(); else V.pause();
+  };
 
   // En cada fotograma: relación entre el reloj del audio grabado y el de la página (su mediana
   // descarta los saltos de ~10 ms con que avanza currentTime), nivel y tiempo grabado.
@@ -149,8 +195,8 @@
     const r = rec;
     if (!r || r.stopping) return;
     r.stopping = true;
-    r.playing = false;
-    const clock = App.player.clockState();
+    if (r.playing) closeSeg(r);
+    r.paused = V.paused = false;
     if (App.player.playing) App.player.pause();
     App.player.setRecordMute(false);
     countEl.hidden = true;
@@ -163,38 +209,77 @@
     rec = null;
     V.recording = false;
     updateUi();
-    if (discard || !r.chunks.length || !r.offsets.length) return;
+    if (discard || !r.chunks.length || !r.offsets.length || !r.segs.length) return;
 
     const offs = [...r.offsets].sort((a, b) => a - b);
     const D = offs[offs.length >> 1];
-    // Muestra f → instante real (f/sr + D − retraso del micrófono) → cabezal (reloj del visor).
-    const atTimeline = (f) => clock.head + (f / sr + D - latIn - clock.wall);
-    const total = r.chunks.reduce((n, c) => n + c.data.length, 0);
-    const pcm = new Float32Array(total);
-    let o = 0;
-    for (const c of r.chunks) { pcm.set(c.data, o); o += c.data.length; }
-    const tl0 = atTimeline(r.chunks[0].frame);
-    const skip = Math.max(0, Math.round((r.startHead - tl0) * sr));
-    const keep = pcm.subarray(Math.min(skip, pcm.length));
-    if (keep.length < sr * 0.3) return toast('La grabación es demasiado corta', 'warn');
-    const start = Math.max(r.startHead, tl0);
+    const takes = assemble(r, sr, D, latIn);
+    if (!takes.length) return toast('La grabación es demasiado corta', 'warn');
 
-    const name = `Voz ${new Date().toLocaleString('sv-SE').replace(/:/g, '-').slice(0, 19)}`;
-    const file = await window.api.saveWav(wav(keep, sr), name);
-    const [id] = await App.library.importPaths([file], { quiet: true });
-    const m = App.media(id);
-    if (!m || !m.info) return toast('No se pudo añadir la grabación', 'err');
-    const len = keep.length / sr;
-    const track = pickTrack(r.o.track, start, start + len);
-    const a = App.createAudioClip(m, { trackId: track.id });
-    a.start = start;
-    a.out = Math.min(a.out, len);
-    state.audioClips.push(a);
-    state.selectedId = a.id;
+    const stamp = new Date().toLocaleString('sv-SE').replace(/:/g, '-').slice(0, 19);
+    const files = [];
+    for (let i = 0; i < takes.length; i++) {
+      files.push(await window.api.saveWav(wav(takes[i].pcm, sr), takes.length > 1 ? `Voz ${stamp} (${i + 1})` : `Voz ${stamp}`));
+    }
+    const ids = await App.library.importPaths(files, { quiet: true });
+    let total = 0, track = null, last = null;
+    takes.forEach((tk, i) => {
+      const m = App.media(ids[i]);
+      if (!m || !m.info) return;
+      const len = tk.pcm.length / sr;
+      track = pickTrack(r.o.track, tk.start, tk.start + len);
+      const a = App.createAudioClip(m, { trackId: track.id });
+      a.start = tk.start;
+      a.out = Math.min(a.out, len);
+      state.audioClips.push(a);
+      total += len;
+      last = a;
+    });
+    if (!last) return toast('No se pudo añadir la grabación', 'err');
+    state.selectedId = last.id;
     state.selKind = 'audio';
     App.commit();
-    toast(`Voz grabada (${Core.formatTime(len, 1)}) en «${track.name}»`, 'ok', 3500);
-    V.last = { start, len, file, skip, latIn, D, tl0, startHead: r.startHead, sr };
+    const n = takes.length > 1 ? ` · ${takes.length} tomas` : '';
+    toast(`Voz grabada (${Core.formatTime(total, 1)}${n}) en «${track.name}»`, 'ok', 3500);
+    V.last = { takes: takes.map((t) => ({ start: t.start, len: t.pcm.length / sr })), segs: r.segs.map((s) => ({ ...s })), latIn, D, sr };
+  }
+
+  // Coloca cada muestra en la línea de tiempo con el reloj del tramo en que se grabó:
+  // muestra f → instante real (f/sr + D − retraso del micrófono) → cabezal. Lo que cae fuera
+  // del tramo (cuenta atrás, pausas) se descarta. Los tramos seguidos (se reanudó sin mover el
+  // cabezal) forman un solo clip; si se movió el cabezal en la pausa, cada parte va en el suyo.
+  function assemble(r, sr, D, latIn) {
+    const groups = [];
+    for (const s of r.segs) {
+      if (s.endHead - s.startHead < 0.02) continue;
+      const g = groups[groups.length - 1];
+      if (g && Math.abs(s.startHead - g.end) < 0.1) { g.segs.push(s); g.end = Math.max(g.end, s.endHead); }
+      else groups.push({ start: s.startHead, end: s.endHead, segs: [s] });
+    }
+    const out = [];
+    for (const g of groups) {
+      const buf = new Float32Array(Math.ceil((g.end - g.start) * sr) + 1);
+      let first = -1, lastIdx = -1;
+      for (const s of g.segs) {
+        const c = s.clock;
+        for (const ch of r.chunks) {
+          const tl0 = c.head + (ch.frame / sr + D - latIn - c.wall);
+          const n = ch.data.length;
+          const i0 = Math.max(0, Math.ceil((s.startHead - tl0) * sr));
+          const i1 = Math.min(n, Math.floor((s.endHead - tl0) * sr));
+          if (i1 <= i0) continue;
+          const base = Math.round((tl0 - g.start) * sr);
+          const a = Math.max(i0, -base), b = Math.min(i1, buf.length - base);
+          if (b <= a) continue;
+          buf.set(ch.data.subarray(a, b), base + a);
+          if (first < 0 || base + a < first) first = base + a;
+          if (base + b - 1 > lastIdx) lastIdx = base + b - 1;
+        }
+      }
+      if (first < 0 || lastIdx - first + 1 < sr * 0.3) continue;
+      out.push({ start: g.start + first / sr, pcm: buf.slice(first, lastIdx + 1) });
+    }
+    return out;
   }
 
   // La pista elegida, o una nueva si ya tiene audio en ese tramo (las tomas no se pisan).
@@ -227,25 +312,42 @@
   }
 
   // ------------------------------------------------------------------ interfaz
-  let shownSec = -1;
+  let shownKey = '';
   function updateUi() {
     btn.classList.toggle('recording', !!rec);
-    btn.title = rec ? 'Detener la grabación (R)' : 'Grabar tu voz sobre el vídeo (R)';
+    btn.title = rec ? 'Terminar la grabación (R)' : 'Grabar tu voz sobre el vídeo (R)';
     chip.hidden = !rec;
-    if (!rec) { shownSec = -1; return; }
-    const sec = rec.playing ? Math.floor((performance.now() - rec.t0) / 1000) : 0;
-    if (sec !== shownSec) { shownSec = sec; chip.querySelector('.t').textContent = rec.playing ? Core.formatTime(sec, 0) : 'preparado'; }
-    chip.querySelector('.lvl > span').style.width = `${Math.min(100, Math.max(0, ((20 * Math.log10(rec.peak || 1e-5) + 60) / 60) * 100))}%`;
+    if (!rec) { shownKey = ''; return; }
+    const ms = rec.elapsed + (rec.playing ? performance.now() - rec.t0 : 0);
+    const key = !rec.started ? 'prep' : `${rec.paused ? 'p' : 'r'}${Math.floor(ms / 1000)}`;
+    if (key !== shownKey) {
+      shownKey = key;
+      chip.classList.toggle('paused', rec.paused);
+      chip.querySelector('.t').textContent = !rec.started ? 'preparado' : `${Core.formatTime(Math.floor(ms / 1000), 0)}${rec.paused ? ' · en pausa' : ''}`;
+      pauseBtn.hidden = !rec.started;
+      pauseBtn.textContent = rec.paused ? '▶' : '❚❚';
+      pauseBtn.title = rec.paused ? 'Reanudar la grabación desde el cabezal (Espacio)' : 'Pausar la grabación (Espacio)';
+    }
+    chip.querySelector('.lvl > span').style.width = rec.paused ? '0%' : `${Math.min(100, Math.max(0, ((20 * Math.log10(rec.peak || 1e-5) + 60) / 60) * 100))}%`;
   }
 
-  // Parar el visor o saltar a otro punto termina la toma (antes de que cambie el reloj).
-  V.onTransport = function () { if (rec && rec.playing) finish(false); };
+  // Parar el visor o saltar a otro punto pausa la toma (antes de que cambie el reloj); al llegar
+  // al final del proyecto, la termina.
+  V.onTransport = function () {
+    if (!rec || !rec.playing) return;
+    const c = App.player.clockState();
+    if (c.head + (performance.now() / 1000 - c.wall) >= App.player.endTime() - 0.03) finish(false);
+    else V.pause();
+  };
 
+  let pauseBtn;
   V.init = function () {
     btn = $('#tl-voice');
     chip = $('#rec-status');
     countEl = $('#rec-count');
+    pauseBtn = chip.querySelector('.p');
     btn.addEventListener('click', () => (rec ? V.stop() : V.open()));
-    chip.querySelector('button').addEventListener('click', V.stop);
+    chip.querySelector('.x').addEventListener('click', V.stop);
+    pauseBtn.addEventListener('click', V.togglePause);
   };
 })();
