@@ -365,7 +365,8 @@ function trackTitles(sources, separate) {
   return ['Mezcla', ...(separate ? sources.map(name) : [])];
 }
 
-function buildArgs(s, caps, enc, conv, { base, nowUs, dir }) {
+// startAt: segundos desde que se fijó la base de tiempo (0 al empezar; más al reconectar).
+function buildArgs(s, caps, enc, conv, { base, nowUs, dir, startAt = 0 }) {
   const src = videoSource(s, caps);
   const args = ['-hide_banner', '-loglevel', 'error', '-nostats', '-progress', 'pipe:1', '-stats_period', '0.5', '-y', '-copyts'];
   const sources = (s.audio || []).filter((a) => a.enabled !== false && a.device);
@@ -420,7 +421,7 @@ function buildArgs(s, caps, enc, conv, { base, nowUs, dir }) {
   const lim = s.mixLimiter !== false ? ',alimiter=limit=0.97:level=0:latency=1' : '';
   sources.forEach((a, i) => {
     // "volume@vN" tiene nombre para poder cambiar el volumen en vivo (ver Capture.applyLive).
-    const chain = `[${i}:a]aresample=48000:async=1000:first_pts=0${audioFx(a)},volume@v${i}=volume=${sourceVolume(a).toFixed(3)}`;
+    const chain = `[${i}:a]aresample=48000:async=1000:first_pts=${Math.round(startAt * 48000)}${audioFx(a)},volume@v${i}=volume=${sourceVolume(a).toFixed(3)}`;
     parts.push(split ? `${chain},asplit=2[am${i}][as${i}]` : `${chain}${sources.length === 1 ? lim : ''}[am${i}]`);
   });
   if (sources.length > 1) parts.push(`${sources.map((_a, i) => `[am${i}]`).join('')}amix=inputs=${sources.length}:normalize=0:duration=longest:dropout_transition=0${lim}[mix]`);
@@ -431,7 +432,18 @@ function buildArgs(s, caps, enc, conv, { base, nowUs, dir }) {
     args.push('-map', '[mix]');
     if (split) sources.forEach((_a, i) => args.push('-map', `[as${i}]`));
   }
-  args.push('-fps_mode:v', 'cfr', '-r', String(s.video.fps), ...encoderArgs(enc, Number(s.quality) || 20, s.video.fps, s.gameFirst ? { ...s, preset: 'speed' } : s));
+  // Al reconectar, la base de tiempo es la de la primera sesión: con fps fijos a la salida,
+  // FFmpeg rellenaba con la primera imagen y silencio todo lo anterior (desde el segundo 0),
+  // lo codificaba de golpe y esos trozos se colaban en los clips (audio de más, imagen
+  // congelada). Con el filtro fps desde el instante de arranque no se genera nada anterior.
+  const rate = startAt > 1
+    ? (() => {
+      const k = args.findIndex((x, j) => args[j - 1] === '-filter_complex' && String(x).endsWith('[v]'));
+      args[k] = `${args[k].slice(0, -3)},fps=${s.video.fps}:start_time=${startAt.toFixed(3)}[v]`;
+      return ['-fps_mode:v', 'passthrough'];
+    })()
+    : ['-fps_mode:v', 'cfr', '-r', String(s.video.fps)];
+  args.push(...rate, ...encoderArgs(enc, Number(s.quality) || 20, s.video.fps, s.gameFirst ? { ...s, preset: 'speed' } : s));
   if (sources.length) {
     const kb = Number(s.audioKbps) || 192;
     args.push('-c:a', s.audioCodec === 'opus' ? 'libopus' : 'aac', '-b:a', `${kb}k`);
@@ -902,7 +914,8 @@ class Capture extends EventEmitter {
     this.warnedMissing = missingKey;
     const dir = await fsp.mkdtemp(path.join(this.tmpRoot, 's-'));
     fs.writeFileSync(path.join(dir, 'owner'), String(process.pid));
-    const { args, titles, ids, vols } = buildArgs(s, caps, enc, conv, { base: this.lock.base, nowUs: this.lock.nowUs, dir });
+    const startAt = Math.max(0, Date.now() / 1000 - this.lock.nowUs / 1e6);
+    const { args, titles, ids, vols } = buildArgs(s, caps, enc, conv, { base: this.lock.base, nowUs: this.lock.nowUs, dir, startAt });
     this.titles = titles;
     const child = spawn(engine.bin.ffmpeg, args, { windowsHide: true });
     if (!s.gameFirst) try { os.setPriority(child.pid, os.constants.priority.PRIORITY_ABOVE_NORMAL); } catch { /* ignorar */ }
@@ -910,7 +923,7 @@ class Capture extends EventEmitter {
     const ss = this.session = {
       child, dir, segs: [], listPos: 0, listBuf: '', minOffset: null, ready: false, stopping: false,
       fps: 0, drops: 0, speed: 0, err: '', encoderLabel: `${enc.label} · ${enc.codec.toUpperCase()}`,
-      diskBytes: 0, started: Date.now(), settings: clone(s), audioIds: ids, vols, ticks: !!videoSource(s, caps).ticks, method: s.video.source === 'monitor' ? monitorMethod(s, caps) : 'wgc',
+      diskBytes: 0, started: Date.now(), startAt, settings: clone(s), audioIds: ids, vols, ticks: !!videoSource(s, caps).ticks, method: s.video.source === 'monitor' ? monitorMethod(s, caps) : 'wgc',
     };
     let buf = '';
     const prog = {};
@@ -983,6 +996,9 @@ class Capture extends EventEmitter {
           ss.listBuf = ss.listBuf.slice(i + 1);
           if (!name) continue;
           const seg = { name, start: Number(a), end: Number(z), wall: Date.now() / 1000 };
+          // Por seguridad: un segmento anterior al arranque de esta sesión solo puede ser
+          // relleno (se solaparía con lo grabado por la sesión anterior).
+          if (ss.startAt > 1 && seg.end < ss.startAt - 0.5) { fs.unlink(path.join(ss.dir, name), () => {}); continue; }
           try { seg.bytes = fs.statSync(path.join(ss.dir, name)).size; } catch { seg.bytes = 0; }
           ss.diskBytes += seg.bytes;
           const off = seg.wall - seg.end;
