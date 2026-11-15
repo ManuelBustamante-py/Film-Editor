@@ -515,10 +515,11 @@ function init(opts) {
   capture.on('segment', () => {});
   capture.on('event', (e) => {
     if (e.item) {
-      recent.unshift(e.item);
+      const known = recent.findIndex((r) => r.path === e.item.path);
+      if (known >= 0) recent[known] = e.item; else recent.unshift(e.item);
       saveRecent();
       const w = getWin();
-      if (tray && !(w && w.isVisible())) notify({ 'clip-saved': 'Clip guardado', 'shot-saved': 'Captura de pantalla guardada' }[e.type] || 'Grabación guardada', path.basename(e.item.path));
+      if (tray && e.type !== 'clip-ready' && !(w && w.isVisible())) notify({ 'clip-saved': 'Clip guardado', 'shot-saved': 'Captura de pantalla guardada' }[e.type] || 'Grabación guardada', path.basename(e.item.path));
     }
     send('capture:event', e.item ? { ...e, item: { ...e.item, thumbUrl: e.item.thumb ? mediaUrl(e.item.thumb) : null } } : e);
   });

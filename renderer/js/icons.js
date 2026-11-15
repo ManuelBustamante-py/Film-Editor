@@ -7,6 +7,7 @@
     skipEnd: `<path d="M18 5v14"/><path d="M4 5v14l11-7z" ${F}/>`,
     frameBack: `<path d="M15 6l-6 6 6 6"/>`,
     frameFwd: `<path d="M9 6l6 6-6 6"/>`,
+    blade: `<path d="M14.5 3.5l6 6L9 21H3v-6z"/><path d="M11 7l6 6"/>`,
     scissors: `<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4L8.12 15.88M14.47 14.48L20 20M8.12 8.12L12 12"/>`,
     trash: `<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>`,
     copy: `<rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/>`,

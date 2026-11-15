@@ -975,6 +975,8 @@
           h('div', { class: 'seg block' }, ...[['speed', 'Velocidad'], ['balanced', 'Equilibrado'], ['quality', 'Calidad']].map(([id, l]) =>
             h('button', { class: (S.preset || 'balanced') === id ? 'on' : '', onclick: () => { set({ preset: id }); renderSide(); } }, l))),
           h('div', { class: 'hint' }, 'Equilibrado es el que se midió en partida a 60 fps reales. «Calidad» exige más a la tarjeta; «Velocidad» deja más margen al juego.')),
+        h('label', { class: 'check-row', title: 'Captura a los fps del clip y con preajuste Velocidad' },
+          h('input', { type: 'checkbox', class: 'switch', checked: !!S.gameFirst, onchange: (e) => { set({ gameFirst: e.target.checked }); renderSide(); } }), 'Priorizar el juego (más fps, el clip puede ser menos fluido)'),
         h('div', { class: 'field' }, h('span', null, 'Prioridad de la captura en la GPU'),
           h('div', { class: 'seg block' }, ...[['normal', 'Normal'], ['high', 'Alta'], ['max', 'Máxima']].map(([id, l]) =>
             h('button', { class: (S.gpuPriority || 'high') === id ? 'on' : '', onclick: () => { set({ gpuPriority: id }); renderSide(); } }, l))),
@@ -1148,13 +1150,20 @@
 
   function onEvent(e) {
     if (e.type === 'clip-start') { chime('start'); toast(`Guardando clip de ${e.seconds} s…`, 'info', 1600); return; }
+    if (e.type === 'clip-ready') {
+      recent = [e.item, ...recent.filter((r) => r.path !== e.item.path)];
+      if (sideTab === 'clips') renderSide();
+      toast(`Clip listo: ${baseName(e.item.path)}`, 'ok', 3500);
+      if (S.addToLibrary) addToLibrary(e.item.path, e.item.kind === 'clip' ? 'clip' : 'recording', { quiet: true });
+      return;
+    }
     if (e.type === 'clip-saved' || e.type === 'recording-saved') {
       if (e.type === 'clip-saved') chime('ok');
       recent = [e.item, ...recent.filter((r) => r.path !== e.item.path)];
       if (sideTab === 'clips') renderSide();
       const name = baseName(e.item.path);
-      toast(`${e.type === 'clip-saved' ? 'Clip guardado' : 'Grabación guardada'}: ${name}`, 'ok', 3500);
-      if (S.addToLibrary) addToLibrary(e.item.path, e.type === 'clip-saved' ? 'clip' : 'recording', { quiet: true });
+      toast(`${e.type === 'clip-saved' ? 'Clip guardado' : 'Grabación guardada'}: ${name}${e.item.deferred ? ' · se terminará al salir del juego' : ''}`, 'ok', 3500);
+      if (S.addToLibrary && !e.item.deferred) addToLibrary(e.item.path, e.type === 'clip-saved' ? 'clip' : 'recording', { quiet: true });
       return;
     }
     if (e.type === 'shot-saved') {

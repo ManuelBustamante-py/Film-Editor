@@ -40,7 +40,7 @@ const DEFAULTS = {
   rate: 'cqp',          // 'cqp' (calidad constante) | 'vbr' (bitrate variable) | 'cbr' (bitrate constante)
   bitrate: 40,          // Mbps (con vbr/cbr)
   preset: 'balanced',   // 'speed' | 'balanced' | 'quality'
-  gpuPriority: 'high',
+  gpuPriority: 'high', gameFirst: false,   // gameFirst: menos carga para el juego (captura a 1×, GPU normal, clip estirado sin prisa)
   audioKbps: 192,
   audioCodec: 'aac',    // 'aac' | 'opus'
   container: 'mp4',
@@ -126,6 +126,29 @@ async function listAudioDevices() {
     else if (/\((video|none)\)/.test(line)) cur = null;
   }
   return devs;
+}
+
+// Comprueba las fuentes de audio guardadas contra los dispositivos presentes. El nombre
+// alternativo de DirectShow cambia si Windows vuelve a instalar el dispositivo (otro puerto USB,
+// un controlador nuevo): entonces se busca por nombre. Las que no están se dejan fuera, para que
+// un micrófono desconectado no impida iniciar la captura.
+let devCache = null;
+async function resolveAudioSources(list) {
+  const wanted = (list || []).filter((a) => a.enabled !== false && a.device);
+  if (!wanted.length || process.env.FOTOGRAMA_FAKE_AUDIO === '1') return { sources: list || [], missing: [] };
+  if (!devCache || Date.now() - devCache.at > 30000) devCache = { at: Date.now(), devs: await listAudioDevices().catch(() => null) };
+  const devs = devCache.devs;
+  if (!devs) return { sources: list, missing: [] };
+  const missing = [];
+  const sources = (list || []).map((a) => {
+    if (a.enabled === false || !a.device) return a;
+    if (a.alt && devs.some((d) => d.alt === a.alt)) return a;
+    const byName = devs.find((d) => d.name === a.device);
+    if (byName) return { ...a, alt: byName.alt };
+    missing.push(a.label || a.device);
+    return { ...a, enabled: false };
+  });
+  return { sources, missing };
 }
 
 // Tamaño real de cada salida de vídeo (DXGI) para relacionarla con las pantallas de Electron.
@@ -226,7 +249,7 @@ const SRC_RATE = (F) => Math.min(240, Number(process.env.FOTOGRAMA_SRCRATE) || F
 
 // Fuente de vídeo como filtro (o como entrada, en el caso de gdigrab).
 function videoSource(s, caps) {
-  const v = s.video, F = v.fps;
+  const v = s.video, F = v.fps, RATE = s.gameFirst ? F : SRC_RATE(F);
   // Solo pruebas: imagen sintética en lugar de la pantalla (FOTOGRAMA_FAKE_SOURCE=ancho x alto).
   if (process.env.FOTOGRAMA_FAKE_SOURCE) {
     const sz = process.env.FOTOGRAMA_FAKE_SOURCE;
@@ -239,7 +262,7 @@ function videoSource(s, caps) {
       // Tamaño fijo: si no, Windows Graphics Capture se queda con el tamaño de la primera imagen
       // (p. ej. mientras el juego se restaura) y todo lo posterior sale encogido y borroso.
       const size = v.window.w && v.window.h ? `:width=${v.window.w}:height=${v.window.h}` : '';
-      return { filter: `gfxcapture=${target}:max_framerate=${SRC_RATE(F)}:capture_cursor=${v.cursor ? 1 : 0}:resize_mode=scale_aspect${size}`, hw: true };
+      return { filter: `gfxcapture=${target}:max_framerate=${RATE}:capture_cursor=${v.cursor ? 1 : 0}:resize_mode=scale_aspect${size}`, hw: true };
     }
     return { input: ['-f', 'gdigrab', '-framerate', String(F), '-draw_mouse', v.cursor ? '1' : '0', '-i', `title=${v.window.title}`], hw: false };
   }
@@ -247,13 +270,13 @@ function videoSource(s, caps) {
   // completa y los cambios de resolución. Desktop Duplication queda como alternativa.
   if (monitorMethod(s, caps) === 'wgc') {
     const size = v.size ? `:width=${v.size.w}:height=${v.size.h}` : '';
-    return { filter: `gfxcapture=monitor_idx=${v.monitor || 0}:max_framerate=${SRC_RATE(F)}:capture_cursor=${v.cursor ? 1 : 0}:resize_mode=scale_aspect${size}`, hw: true, wgc: true };
+    return { filter: `gfxcapture=monitor_idx=${v.monitor || 0}:max_framerate=${RATE}:capture_cursor=${v.cursor ? 1 : 0}:resize_mode=scale_aspect${size}`, hw: true, wgc: true };
   }
   // Como OBS: un reloj fijo a los fps de salida que, en cada tic, toma la última imagen lista.
   // Las marcas quedan perfectamente regulares (sin el desfase de sellar cada imagen al llegar).
   if (process.env.FOTOGRAMA_TICKS === '1') return { filter: `ddagrab=output_idx=${v.monitor || 0}:framerate=${F}:draw_mouse=${v.cursor ? 1 : 0}`, hw: true, ticks: true };
   // Sin duplicar fotogramas en el origen: así FFmpeg cuenta los repetidos y se conoce la tasa real.
-  return { filter: `ddagrab=output_idx=${v.monitor || 0}:framerate=${SRC_RATE(F)}:draw_mouse=${v.cursor ? 1 : 0}:dup_frames=${process.env.FOTOGRAMA_DUP === '1' ? 1 : 0}`, hw: true };
+  return { filter: `ddagrab=output_idx=${v.monitor || 0}:framerate=${RATE}:draw_mouse=${v.cursor ? 1 : 0}:dup_frames=${process.env.FOTOGRAMA_DUP === '1' ? 1 : 0}`, hw: true };
 }
 
 function monitorMethod(s, caps) {
@@ -408,7 +431,7 @@ function buildArgs(s, caps, enc, conv, { base, nowUs, dir }) {
     args.push('-map', '[mix]');
     if (split) sources.forEach((_a, i) => args.push('-map', `[as${i}]`));
   }
-  args.push('-fps_mode:v', 'cfr', '-r', String(s.video.fps), ...encoderArgs(enc, Number(s.quality) || 20, s.video.fps, s));
+  args.push('-fps_mode:v', 'cfr', '-r', String(s.video.fps), ...encoderArgs(enc, Number(s.quality) || 20, s.video.fps, s.gameFirst ? { ...s, preset: 'speed' } : s));
   if (sources.length) {
     const kb = Number(s.audioKbps) || 192;
     args.push('-c:a', s.audioCodec === 'opus' ? 'libopus' : 'aac', '-b:a', `${kb}k`);
@@ -525,6 +548,21 @@ function setGpuPriority(pid, level) {
     p.on('error', () => resolve(false));
     p.on('close', () => resolve(out.trim() === '0'));
   });
+}
+
+// Avisa del programa en primer plano (una vez o cada 3 s). El bucle termina solo si se cierra la app.
+function foregroundWatch(onName, once = false) {
+  const def = '[DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr h, out uint p);';
+  const ps = `Add-Type -Name F -Namespace U -MemberDefinition '${def}'; do { [uint32]$p = 0; [void][U.F]::GetWindowThreadProcessId([U.F]::GetForegroundWindow(), [ref]$p); 'fg:' + (Get-Process -Id $p -ErrorAction SilentlyContinue).ProcessName; ${once ? 'break' : 'Start-Sleep 3'} } while (Get-Process -Id ${process.pid} -ErrorAction SilentlyContinue)`;
+  const p = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', ps], { windowsHide: true });
+  let buf = '';
+  p.stdout.on('data', (d) => {
+    buf += d;
+    const lines = buf.split(/\r?\n/);
+    buf = lines.pop();
+    for (const l of lines) if (l.startsWith('fg:')) onName(l.slice(3).trim());
+  });
+  return p;
 }
 
 // Saca el proceso de captura del "modo eficiencia" de Windows 11 (EcoQoS): a un proceso en
@@ -822,7 +860,7 @@ class Capture extends EventEmitter {
     // cambia de resolución, la imagen se adapta a este tamaño y los segmentos siguen siendo
     // compatibles entre sí (se pueden unir en un mismo clip).
     const key = JSON.stringify([s.video.source, s.video.method, s.video.conv, s.video.monitor, s.video.window && s.video.window.exe, s.video.resolution, s.video.fps,
-      s.encoder, s.codec, s.quality, s.audioCodec, s.rate, s.bitrate, s.preset, s.mixLimiter, s.audioKbps, s.separateTracks, s.audio.map((a) => [a.id, a.device, a.enabled, a.offsetMs, a.fx || null])]);
+      s.encoder, s.codec, s.quality, s.audioCodec, s.rate, s.bitrate, s.preset, s.gameFirst, s.mixLimiter, s.audioKbps, s.separateTracks, s.audio.map((a) => [a.id, a.device, a.enabled, a.offsetMs, a.fx || null])]);
     if (this.lock && this.lock.key !== key) { this.dropOld(); this.lock = null; }
     // Los juegos en pantalla completa exclusiva (p. ej. VALORANT a 1440×1044) cambian el modo de
     // la pantalla al entrar y al salir, y la captura se reconecta. Se adopta siempre el tamaño
@@ -855,12 +893,19 @@ class Capture extends EventEmitter {
     const conv = await pickPipeline(s, caps, enc);
     await fsp.mkdir(this.tmpRoot, { recursive: true });
     await this.cleanupStale();
+    const audio = await resolveAudioSources(s.audio);
+    s.audio = audio.sources;
+    const missingKey = audio.missing.join('|');
+    if (missingKey && missingKey !== this.warnedMissing) {
+      this.emit('event', { type: 'error', message: `No se encontró ${audio.missing.length > 1 ? 'los dispositivos' : 'el dispositivo'} de audio «${audio.missing.join('», «')}»: se graba sin ${audio.missing.length > 1 ? 'ellos' : 'él'}. Revisa las fuentes de audio.` });
+    }
+    this.warnedMissing = missingKey;
     const dir = await fsp.mkdtemp(path.join(this.tmpRoot, 's-'));
     fs.writeFileSync(path.join(dir, 'owner'), String(process.pid));
     const { args, titles, ids, vols } = buildArgs(s, caps, enc, conv, { base: this.lock.base, nowUs: this.lock.nowUs, dir });
     this.titles = titles;
     const child = spawn(engine.bin.ffmpeg, args, { windowsHide: true });
-    try { os.setPriority(child.pid, os.constants.priority.PRIORITY_ABOVE_NORMAL); } catch { /* ignorar */ }
+    if (!s.gameFirst) try { os.setPriority(child.pid, os.constants.priority.PRIORITY_ABOVE_NORMAL); } catch { /* ignorar */ }
     const throttle = disablePowerThrottling(child.pid);
     const ss = this.session = {
       child, dir, segs: [], listPos: 0, listBuf: '', minOffset: null, ready: false, stopping: false,
@@ -1430,9 +1475,11 @@ class Capture extends EventEmitter {
       }
     }
     const opts = { marks: times };
-    if (!post) {
+    // Con el juego delante se guarda sin recodificar: el estirado y el análisis esperan a que salgas.
+    const later = await this.gameInFront();
+    if (!post || later) {
       await this.remux(runs, out, opts);
-      return this.finish(out, kind, times);
+      return this.finish(out, kind, times, { later, post });
     }
     const native = `${out}.nativo.mp4`;
     try {
@@ -1445,7 +1492,7 @@ class Capture extends EventEmitter {
     } finally {
       try { fs.unlinkSync(native); } catch { /* ignorar */ }
     }
-    return this.finish(out, kind, times);
+    return this.finish(out, kind, times, { later, post });
   }
 
   // Estira un clip grabado a la resolución pedida (16:9, como escalador.bat), en la GPU si se
@@ -1544,7 +1591,65 @@ class Capture extends EventEmitter {
     }
   }
 
-  async finish(file, kind, markers = []) {
+  isGame(name) {
+    const w = this.settings && this.settings.video && this.settings.video.window;
+    const exe = w && w.exe ? String(w.exe).replace(/\.exe$/i, '').toLowerCase() : '';
+    const n = String(name || '').toLowerCase();
+    return n.startsWith('valorant') || (!!exe && n === exe);
+  }
+
+  gameInFront() {
+    return new Promise((resolve) => {
+      let done = false;
+      const end = (v) => { if (!done) { done = true; clearTimeout(t); try { p.kill(); } catch { /* ignorar */ } resolve(v); } };
+      const p = foregroundWatch((name) => end(this.isGame(name)), true);
+      const t = setTimeout(() => end(false), 3000);
+      p.on('error', () => end(false));
+      p.on('close', () => end(false));
+    });
+  }
+
+  // Clips pendientes: se procesan cuando el juego lleva un rato sin estar en primer plano.
+  deferLater(item, post) {
+    this.pending = [...(this.pending || []), { item, post }];
+    if (this.gameWatch) return;
+    let calm = 0;
+    this.gameWatch = foregroundWatch((name) => {
+      calm = this.isGame(name) ? 0 : calm + 1;
+      this.fgName = name;
+      if (calm >= 5) this.runPending();
+    });
+    this.gameWatch.on('error', () => { this.gameWatch = null; this.runPending(); });
+  }
+
+  async runPending() {
+    if (this.stretching) return;
+    this.stretching = true;
+    try {
+      while (this.pending.length && !this.isGame(this.fgName)) {
+        const { item, post } = this.pending[0];
+        if (post) {
+          const tmp = `${item.path}.estirando${path.extname(item.path)}`;
+          try {
+            await this.stretch(item.path, tmp, post);
+            fs.renameSync(tmp, item.path);
+          } catch (e) {
+            try { fs.unlinkSync(tmp); } catch { /* ignorar */ }
+            this.emit('event', { type: 'info', message: `No se pudo estirar ${path.basename(item.path)}: queda en su tamaño original.` });
+          }
+        }
+        this.pending.shift();
+        let size = item.size;
+        try { size = fs.statSync(item.path).size; } catch { /* ignorar */ }
+        this.emit('event', { type: 'clip-ready', item: { ...item, size, deferred: false } });
+      }
+    } finally {
+      this.stretching = false;
+      if (!this.pending.length && this.gameWatch) { try { this.gameWatch.kill(); } catch { /* ignorar */ } this.gameWatch = null; }
+    }
+  }
+
+  async finish(file, kind, markers = [], { later = false, post = null } = {}) {
     const st = fs.statSync(file);
     let duration = 0;
     try { duration = (await engine.probe(file)).duration; } catch { /* ignorar */ }
@@ -1556,8 +1661,9 @@ class Capture extends EventEmitter {
         '-frames:v', '1', '-vf', 'scale=320:-2', '-q:v', '4', thumb], { timeout: 15000 });
       if (r.code !== 0) thumb = null;
     } catch { thumb = null; }
-    const item = { path: file, kind, created: Date.now(), duration, size: st.size, thumb, markers };
+    const item = { path: file, kind, created: Date.now(), duration, size: st.size, thumb, markers, deferred: !!later };
     this.emit('event', { type: kind === 'clip' ? 'clip-saved' : 'recording-saved', item });
+    if (later) this.deferLater(item, post);
     return item;
   }
 

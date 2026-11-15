@@ -376,7 +376,7 @@
       h('div', null, 'Selecciona un clip de vídeo, audio o texto en la línea de tiempo para editarlo.'),
       h('div', { class: 'kbd-list' },
         kb('Espacio', 'Reproducir / pausa'), kb('← →', 'Fotograma anterior / siguiente'), kb('Mayús + ← →', 'Saltar 1 segundo'),
-        kb('S', 'Dividir en el cabezal'), kb('I / O', 'Marcar entrada / salida'), kb('T', 'Añadir texto'), kb('Supr', 'Eliminar'),
+        kb('S', 'Dividir en el cabezal'), kb('B', 'Cuchilla (cortar con clic)'), kb('I / O', 'Marcar entrada / salida'), kb('T', 'Añadir texto'), kb('Supr', 'Eliminar'),
         kb('Ctrl + D', 'Duplicar'), kb('Ctrl + Z / Y', 'Deshacer / rehacer'), kb('N', 'Activar / desactivar imán'),
         kb('F', 'Pantalla completa'), kb('Ctrl + rueda', 'Zoom de la línea de tiempo'), kb('Ctrl + E', 'Exportar'))));
   }

@@ -376,6 +376,43 @@
     return best;
   }
 
+  // ------------------------------------------------------------------ modo cuchilla
+  // Con la cuchilla activa, cada clic sobre un clip lo corta en ese punto (vídeo, audio o
+  // texto). Alt+clic selecciona sin cortar, para poder borrar un trozo sin salir del modo.
+  T.razor = false;
+  T.setRazor = function (on = !T.razor) {
+    T.razor = !!on;
+    contentEl.classList.toggle('razor', T.razor);
+    $('#tl-razor').classList.toggle('active', T.razor);
+    if (!T.razor) razorLine(null);
+  };
+  // Instante del corte bajo el ratón (con imán: se pega al cabezal y a los bordes).
+  function razorTime(clientX, id) {
+    const t = timeAt(clientX);
+    const sn = snapDelta([t], snapPoints(id));
+    return Math.max(0, t + sn.d);
+  }
+  function razorLine(t, ev) {
+    let el = contentEl.querySelector('.razor-line');
+    if (t == null) { if (el) el.remove(); tip(null); return; }
+    if (!el) { el = h('div', { class: 'razor-line' }); contentEl.appendChild(el); }
+    el.style.left = `${t * state.zoom}px`;
+    tip(`Cortar en ${Core.formatTime(t)}`, ev.clientX, ev.clientY);
+  }
+  function razorHover(e) {
+    if (!T.razor || e.buttons) return;
+    const node = e.target.closest('.clip');
+    if (!node || e.altKey) return razorLine(null);
+    razorLine(razorTime(e.clientX, node.dataset.id), e);
+  }
+  function razorCut(e, node) {
+    const { id, kind } = node.dataset;
+    const t = razorTime(e.clientX, id);
+    if (App.player.playing) App.player.pause();
+    if (App.splitAt(t, { kind, id }) === false) toast('Demasiado cerca del borde del clip para cortar', 'warn', 1500);
+    else App.player.seek(t);
+  }
+
   // ------------------------------------------------------------------ interacción
   function startScrub(e) {
     if (App.player.playing) App.player.pause();
@@ -598,6 +635,8 @@
       const handle = e.target.closest('.clip-handle');
       const node = e.target.closest('.clip');
       if (!node) return startScrub(e);
+      if (T.razor && !e.altKey) return razorCut(e, node);
+      if (T.razor) return App.select(node.dataset.id, { kind: node.dataset.kind });
       const { id, kind } = node.dataset;
       if (kind === 'video') return handle ? startVideoTrim(e, id, handle.dataset.side) : startVideoPress(e, id);
       startFree(e, kind, id, handle ? handle.dataset.side : null);
@@ -673,6 +712,9 @@
     $('#tl-zoom-out').addEventListener('click', () => T.zoomBy(1 / 1.4));
     $('#tl-fit').addEventListener('click', T.fit);
     $('#tl-split').addEventListener('click', App.splitAtPlayhead);
+    $('#tl-razor').addEventListener('click', () => T.setRazor());
+    contentEl.addEventListener('pointermove', razorHover);
+    contentEl.addEventListener('pointerleave', () => { if (T.razor) razorLine(null); });
     $('#tl-dup').addEventListener('click', () => App.duplicateSelected());
     $('#tl-del').addEventListener('click', () => App.removeSelected());
     $('#tl-add-text').addEventListener('click', App.addText);

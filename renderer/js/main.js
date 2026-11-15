@@ -114,11 +114,15 @@
       case 'Home': e.preventDefault(); App.player.toStart(); break;
       case 'End': e.preventDefault(); App.player.toEnd(); break;
       case 'Delete': case 'Backspace': e.preventDefault(); App.removeSelected(); break;
-      case 'Escape': if (App.player.cropEdit) App.player.setCropEdit(false); break;
+      case 'Escape':
+        if (App.timeline.razor) App.timeline.setRazor(false);
+        else if (App.player.cropEdit) App.player.setCropEdit(false);
+        break;
       case '+': case '=': App.timeline.zoomBy(1.4); break;
       case '-': App.timeline.zoomBy(1 / 1.4); break;
       default:
         if (k === 's') App.splitAtPlayhead();
+        else if (k === 'b') App.timeline.setRazor();
         else if (k === 'i') App.player.mode === 'source' ? App.player.markSource('in') : App.markAtPlayhead('in');
         else if (k === 'o') App.player.mode === 'source' ? App.player.markSource('out') : App.markAtPlayhead('out');
         else if (k === 'j') App.player.skip(-5);

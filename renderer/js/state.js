@@ -249,9 +249,12 @@
   App.duplicateClip = App.duplicateSelected;
 
   // Divide el elemento seleccionado (audio/texto) o el clip de vídeo bajo el cabezal.
-  App.splitAtPlayhead = function () {
-    const t = state.playhead;
-    const a = App.selectedAudio();
+  App.splitAtPlayhead = function () { App.splitAt(state.playhead); };
+
+  // Divide en el instante t. Con target ({kind, id}) corta ese elemento (modo cuchilla);
+  // sin él, el audio o texto seleccionado o, si no, el clip de vídeo que haya en t.
+  App.splitAt = function (t, target = null) {
+    const a = target ? (target.kind === 'audio' ? App.audioClip(target.id) : null) : App.selectedAudio();
     if (a && t > a.start + 0.05 && t < a.start + a.out - a.in - 0.05) {
       const b = { ...JSON.parse(JSON.stringify(a)), id: uid('a') };
       const cut = a.in + (t - a.start);
@@ -264,7 +267,7 @@
       state.selectedId = b.id;
       return App.commit();
     }
-    const x = App.selectedText();
+    const x = target ? (target.kind === 'text' ? App.textClip(target.id) : null) : App.selectedText();
     if (x && t > x.start + 0.05 && t < x.start + x.duration - 0.05) {
       const b = { ...JSON.parse(JSON.stringify(x)), id: uid('x') };
       b.start = t;
@@ -274,11 +277,15 @@
       state.selectedId = b.id;
       return App.commit();
     }
+    if (target && target.kind !== 'video') return false;
     const loc = App.player.locate(t);
     if (!loc) return toast('No hay ningún clip bajo el cabezal', 'warn');
     const c = state.clips[loc.i];
     const st = c.in + loc.local * c.speed;
-    if (st - c.in < 0.05 || c.out - st < 0.05) return toast('Mueve el cabezal dentro del clip para dividirlo', 'warn');
+    if (st - c.in < 0.05 || c.out - st < 0.05) {
+      if (target) return false;
+      return toast('Mueve el cabezal dentro del clip para dividirlo', 'warn');
+    }
     const b = JSON.parse(JSON.stringify(c));
     b.id = uid('c');
     b.in = st;

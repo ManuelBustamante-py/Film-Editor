@@ -13,7 +13,7 @@
   ];
   // Velocidad medida (veces el tiempo real) con 8 hilos: para estimar cuánto tardará.
   const SPEED = { precise: 2.3, fast: 5 };
-  let layer, textEl, chip, ccBtn;
+  let layer, textEl, chip, ccBtn, redoBtn;
   let job = null;            // { id, mediaId, name, phase, pct, paused }
   let shownText = null;
 
@@ -55,6 +55,7 @@
   // Se llama en cada fotograma: solo toca el DOM cuando cambia el texto.
   S.render = function () {
     if (!layer) return;
+    updateRedo();
     let text = '';
     if (S.visible) {
       const P = App.player;
@@ -77,6 +78,7 @@
     layer.hidden = !text;
   };
 
+  function updateRedo() { const m = currentMedia(), show = !!(m && S.of(m.id)); if (redoBtn.hidden === show) redoBtn.hidden = !show; redoBtn.disabled = !!job; }
   function updateCc() {
     if (!ccBtn) return;
     ccBtn.classList.toggle('on', S.visible);
@@ -252,7 +254,7 @@
     textEl = layer.querySelector('span');
     chip = $('#subs-status');
     ccBtn = $('#btn-cc');
-    ccBtn.addEventListener('click', ccClick);
+    ccBtn.addEventListener('click', ccClick); redoBtn = $('#btn-cc-redo'); redoBtn.addEventListener('click', () => { const m = currentMedia(); if (m) S.generate(m.id); });
     chip.querySelector('button').addEventListener('click', () => { if (job) window.api.cancelJob(job.id); });
     // El tamaño de letra sigue al del visor, como quedará al grabarlos en el vídeo.
     const stage = $('#stage');
